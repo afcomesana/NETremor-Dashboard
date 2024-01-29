@@ -1,0 +1,38 @@
+{% include "dashboard/header.html" %}
+
+<div class="py-5 px-3 bg-primary-light-subtle">
+    
+    {% if is_success %}
+
+        <div class="alert alert-success text-center">
+            <div class="h2 mb-4">¡Tu cuenta ha sido verificada correctamente!</div>
+            <div class="h4 mb-4">Ya puedes iniciar sesión con tu nombre de usuario o correo electrónico.</div>
+            <a href="{% url 'dashboard:login' %}" class="btn btn-dark">Iniciar sesión</a>
+        </div>
+
+    {% endif %}
+
+
+    {% if error_message %}
+
+        <div class="alert alert-danger text-center">
+            <div class="h2 mb-4">Error de verificación</div>
+            <div class="h4 mb-4">{{ error_message }}</div>
+            <a href="mailto:alberto.comesana@csic.es" class="btn btn-dark">Contacta con soporte</a>
+        </div>
+
+    {% endif %}
+
+    {% if warning_message %}
+
+        <div class="alert alert-warning text-center">
+            <div class="h2 mb-4">Advertencia</div>
+            <div class="h4 mb-4">{{ warning_message }}</div>
+            <a href="{% url 'dashboard:login' %}" class="btn btn-dark">Iniciar sesión</a>
+        </div>
+
+    {% endif %}
+
+</div>
+
+{% include "dashboard/footer.html" %}

@@ -1,0 +1,7 @@
+/netremor_dahsboard/.vscode
+/mongo/.vscode
+/netremor_dashboard/dashboard/static/dashboard/fontawesome/
+/netremor_dashboard/dashboard/static/dashboard/bootstrap/
+/netremor_dashboard/data-files/
+.env
+.docs

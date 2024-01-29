@@ -1,0 +1,98 @@
+{% include "dashboard/header.html" %}
+{% load dashboard_tags %}
+
+<div class="container">
+    {% if subjects_list %}
+
+        <div class="mb-5">
+            <h1 class="mb-5">Subjects</h1>
+
+            <!-- Filtro -->
+            <script>
+                const filterSubjects = () => {
+
+                    const noSubjectsRow = document.getElementById("no-subjects-found-row");
+
+                    // Get user input and normalize it:
+                    let { target: { value } } = event;
+                    value = normalizeText(value)
+                    
+                    // Show or hide each subject card:
+                    const subjects = Array.from(document.getElementsByClassName("subject-item"));
+
+                    let hiddenSubjects = 0;
+
+                    subjects.forEach(subject => {
+                            const { name } = subject.dataset
+
+                            const tableRow = subject.closest("tr");
+
+                            if (!value) {
+                                tableRow.classList.remove("d-none");
+                                return;
+                            }
+
+                            if ( name.includes(value) ) {
+                                tableRow.classList.remove("d-none");
+                            } else {
+                                tableRow.classList.add("d-none");
+                                hiddenSubjects++;
+                            }
+                        });
+
+                    if (hiddenSubjects == subjects.length) {
+                        noSubjectsRow.classList.remove("d-none");
+                    } else {
+                        noSubjectsRow.classList.add("d-none");
+                    }
+                }
+
+            </script>
+            <input class="rounded border" onkeyup="filterSubjects()" type="text" name="subject_filter" id="subject_filter" placeholder="Search by name">
+            
+        </div>
+
+        <table class="table align-middle">
+            <thead class="h5">
+                <th>Name</th>
+                <th class="text-center">Age</th>
+                <th>Diagnosis</th>
+                <th></th>
+            </thead>
+            <tbody>
+
+                {% for subject in subjects_list %}
+                    
+                    <tr>
+                        <td>{{ subject.name |title }}</td>
+                        <td class="text-center">{{ subject.age }}</td>
+                        <td>{% if subject.diagnosis != "" %}{{ subject.diagnosis |title }}{% else %}Healthy{% endif %}</td>
+                        <td>
+                            <a
+                                href="{% url 'dashboard:records' subject.id %}"
+                                data-name="{{ subject.name |normalize }}"
+                                class="subject-item btn btn-primary">
+                                See records
+                            </a>
+                        </td>
+                    </tr>
+
+                {% endfor %}
+
+                <tr id="no-subjects-found-row" class="d-none">
+                    <td colspan="4" class="text-center">
+                        <div class="alert alert-warning d-inline-block text-center my-3">
+                            No subjects found.
+                        </div>
+                    </td>
+                </tr>
+
+            </tbody>
+        </table>
+
+    {% else %}
+        <p>No subjects found.</p>
+    {% endif %}
+</div>
+
+{% include "dashboard/footer.html" %}

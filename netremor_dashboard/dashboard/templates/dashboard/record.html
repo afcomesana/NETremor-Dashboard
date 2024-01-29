@@ -1,0 +1,162 @@
+{% include "dashboard/header.html" %}
+<input type="hidden" id="record-type" value="{{ record.type }}">
+<div class="container">
+    <h3 class="mb-3">
+        {{ record.get_type_display }} record from {{ record.subject.name |title }}
+        <!-- DOWNLOAD DATA -->
+        <a class="d-inline-block border rounded cursor-pointer py-2 px-3 ms-3 h4" href="{{ request.path }}?download=true"><i class="fa-solid fa-download"></i></a>
+        <br>
+
+        {% if record.type == "ambulatory" %}
+            <small class="text-secondary">{{ record.added_on |date:"M/d H:i" }}</small>
+        {% endif %}
+
+    </h3>
+
+    {% if record.type == "ambulatory" %}
+
+        <div class="row">
+
+            <!-- TASKS SELECTOR -->
+            <div class="col-3">
+
+                <div id="tasks-container" class="rounded bg-primary-light-subtle p-3">
+                    {% for task in tasks %}
+                        <!-- TASK NAME TO SHOW DIFFERENT OPTIONS -->
+                        <div class="{% if tasks|length != forloop.counter%}mb-3{% endif %}">
+                            <a
+                                class="task-name-container d-flex justify-content-between h5 collapsed"
+                                data-bs-toggle="collapse"
+                                href="#task-{{ forloop.counter }}"
+                                role="button"
+                                aria-expanded="false"
+                                aria-controls="task-{{ forloop.counter }}">
+                                
+                                <b>{% if task.task_description != "" %}{{ task.task_description }}{% else %}{{ task.task_name }}{% endif %}</b>
+                                <i class="task-name-collapse-icon fa-solid fa-chevron-down"></i>
+                            </a>
+
+                            <!-- OPTIONS AVAILABLE TO PLOT -->
+                            <div class="task-options-container collapse border-bottom py-2" id="task-{{ forloop.counter }}">
+
+                                {% for ids in task.data_file_ids %}
+                                
+                                    <div
+                                        data-id="{{ ids }}"
+                                        class="trial-option d-inline-block badge bg-dark text-white cursor-pointer mb-2">
+                                        Trial {{ forloop.counter }}
+                                    </div>
+
+                                {% endfor %}
+
+                            </div>
+
+                        </div>
+
+                    {% endfor %}
+
+                </div>
+            </div>
+
+            <!-- CHART CONTAINER -->
+            <div class="col-9">
+
+    {% endif %}
+
+                <!-- FILTERS -->
+                <div id="record-filters-container" class="mb-3">
+                    <div class="row align-items-end">
+
+                        <!-- SENSOR FILTERS -->
+                        {% if sensor_choices %}
+                            <div class="col-12 col-sm-4">
+                                <div class="h4 mb-3">Sensors</div>
+                                <div class="d-flex flex-wrap">
+                                    {% for sensor in sensor_choices %}
+                                        <button
+                                            class="sensor-filter btn border me-2 p-1 {% if forloop.counter == 1 %}selected btn-primary{% endif %}"
+                                            id="sensor-{{ sensor.0 }}">
+                                            {{ sensor.1 }}
+                                        </button>
+
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+
+                        <!-- AXIS FILTERS -->
+                        <div class="col-12 col-sm-4">
+                            <div class="h4 mb-3">Axis</div>
+                            {% with axis_choices="x y z" %}
+                                {% for axis in axis_choices.split %}
+                                    <span class="axis-filter btn selected border cursor-pointer me-2 py-1 px-2" id="axis-{{ axis }}"> {{ axis | title }}</span>
+                                {% endfor %}
+                            {% endwith %}
+                        </div>
+
+                        <!-- METRIC OPTIONS -->
+                        <div class="col-12 col-sm-4">
+                            <div class="h4 mb-3">Metrics</div>
+                            {% with metric_options="raw energy spectrogram" %}
+                                {% for metric in metric_options.split %}
+                                    <span
+                                        class="metric-option btn border me-2 p-1 {% if forloop.counter == 1 %}selected btn-primary{% endif %} {% if forloop.counter == 1 %}selected{% endif %}"
+                                        id="metric-{{ metric }}">
+                                        {{ metric | title }}
+                                    </span>
+                                {% endfor %}
+                            {% endwith %}
+                        </div>
+
+                    </div>
+
+                    <input type="hidden" id="plot-selection" value="">
+                </div>
+
+                <!-- CHART -->
+                <div id="record-chart-container" class="d-flex align-items-center justify-content-center position-relative">
+
+                    {% if record.type == "ambulatory" %}
+
+                        Select a task.
+
+                    {% endif %}
+
+                </div>
+
+    {% if record.type == "ambulatory" %}
+            </div>
+        </div>
+    {% endif %}
+
+</div>
+
+{% load static %}
+<script type="module" src="{% static 'dashboard/Plotter.js' %}"></script>
+<script type="module" src="{% static 'dashboard/record.js' %}"></script>
+<style>
+    #record-chart-container {
+        min-height: 200px;
+    }
+
+    .trial-option, .axis-filter, .sensor-filter {
+        transition: all ease .3s;
+    }
+
+    .task-name-collapse-icon {
+        transition: all ease .2s;
+        transform: rotate(180deg);
+    }
+
+    .task-name-container.collapsed .task-name-collapse-icon {
+        transform: rotate(0);
+    }
+
+    .line {
+        transition: opacity ease .2s;
+    }
+
+
+</style>
+
+{% include "dashboard/footer.html" %}

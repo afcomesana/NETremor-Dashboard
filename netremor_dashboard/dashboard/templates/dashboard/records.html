@@ -1,0 +1,90 @@
+{% include "dashboard/header.html" %}
+
+<div class="container">
+
+    <div class="mb-5">
+        <h1>{{ subject.name |title }}</h1>
+    </div>
+
+    <div class="row">
+
+        <!-- CONTINUOUS RECORDS -->
+        <div class="col-12 col-sm-6">
+
+            <div id="continuous-record-container" class="mb-5">
+                <h2 class="mb-3">Continuous record</h2>
+                {% if continuous_record %}
+        
+                    <a href="{% url 'dashboard:record' continuous_record.id %}" class="btn btn-dark d-inline-block">
+                        See continuous record
+                    </a>
+        
+                {% else %}
+        
+                    <div class="alert alert-warning d-inline-block">
+                        No continuous record yet.
+                    </div>
+        
+                {% endif %}
+            </div>
+
+        </div>
+
+        <!-- AMBULATORY RECORDS -->
+        <div class="col-12 col-sm-6">
+
+            <div id="ambulatory-records-container">
+                <h2 class="mb-3">Ambulatory records</h2>
+
+                {% if ambulatory_records %}
+
+                    <table class="table align-middle">
+                        <thead class="h5">
+                            <th>Nº tasks</th>
+                            <th>Received on</th>
+                            <th></th>
+                        </thead>
+                        <tbody>
+
+                            {% for record in ambulatory_records %}
+                                
+                                <tr>
+                                    <td>{{ record.tasks_number |title }}</td>
+                                    <td>{{ record.added_on |date:"M/d H:i" }}</td>
+                                    <td>
+                                        <a
+                                            href="{% url 'dashboard:record' record.id %}"
+                                            class="subject-item btn btn-primary">
+                                            See record
+                                        </a>
+                                    </td>
+                                </tr>
+
+                            {% endfor %}
+
+                            <tr id="no-subjects-found-row" class="d-none">
+                                <td colspan="4" class="text-center">
+                                    <div class="alert alert-warning d-inline-block text-center my-3">
+                                        No subjects found.
+                                    </div>
+                                </td>
+                            </tr>
+
+                        </tbody>
+                    </table>
+                {% else %}
+
+                    <div class="alert alert-warning d-inline-block">
+                        No ambulatory record yet.
+                    </div>
+
+                {% endif %}
+            </div>
+
+        </div>
+    </div>
+
+
+</div>
+
+{% include "dashboard/footer.html" %}

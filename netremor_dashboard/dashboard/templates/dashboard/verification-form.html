@@ -1,0 +1,35 @@
+{% include "dashboard/header.html" %}
+
+<div class="py-5 px-3 bg-primary-light-subtle">
+
+    <form method="POST" class="d-flex justify-content-center align-items-center flex-column">
+        {% csrf_token %}
+        <div class="h2 text-center mb-4">{{ verification_title |safe }}</div>
+
+        {% if verification_text %}
+            <p class="text-center mb-4">{{ verification_text |safe }}</p>
+        {% endif %}
+        
+        <input class="d-block rounded border mb-4" type="email" name="verification_user_email" value="{{ user_email }}" {% if is_input_readonly %}readonly{% endif %}>
+        
+        {% if verification_subtitle %}
+            <div class="h4 text-center mb-4">{{ verification_subtitle |safe }}</div>
+        {% endif %}
+
+        {% if verification_error_message %}
+            <div class="h5 text-danger text-center mb-4">{{ verification_error_message |safe }}</div>
+        {% endif %}
+
+        {% if not is_submit_button_hidden %}
+            <input type="submit" value="Reenviar correo" class="btn btn-dark d-inline-block mx-auto">
+        {% endif %}
+
+        
+        {% if not is_login_button_hidden %}
+            <a href="{% url 'dashboard:login' %}" class="btn btn-dark d-inline-block mx-auto">Iniciar sesión</a>
+        {% endif %}
+    </form>
+
+</div>
+
+{% include "dashboard/footer.html" %}

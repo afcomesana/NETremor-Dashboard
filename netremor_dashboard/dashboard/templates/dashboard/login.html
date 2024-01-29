@@ -1,0 +1,230 @@
+{% include "dashboard/header.html" %}
+
+{% load dashboard_tags %}
+
+<div class="container d-flex align-items-center justify-content-center" style="height: 100vh">
+    <div class="login-container border rounded">
+        <div class="row">
+
+            <!-- LOGIN FORM -->
+            <form id="user-login" method="POST" class="col-12 col-md-6 border-end">
+                
+                {% csrf_token %}
+
+                <input type="hidden" name="form_type" value="login">
+
+                <div class="d-flex flex-column align-items-center p-3">
+
+                    <h2 class="mb-3">Sign in</h2>
+                    {% for field in login_form %}
+                        {% with "login_"|add:field.name as field_name %}
+                            <fieldset class="w-100 mb-3">
+                                <label for="{{ field_name }}">{{ field.label }}</label>
+
+                                {% if "password" in field_name %}
+                                    <div class="password-input-wrapper">
+                                {% endif %}
+
+                                    <input
+                                        class="{{ field.class }}  {% if field_name in missing_fields %}border-danger{% endif %}"
+                                        type="{{ field.type }}"
+                                        name="{{ field_name }}"
+                                        id="{{ field_name }}"
+                                        {% if field_name in form_fields and "password" not in field_name %}
+                                            value="{{ form_fields|get_item:field_name }}"
+                                        {% endif %}
+                                    >
+
+                                {% if "password" in field_name %}
+                                        <i class="show-password-icon fa-solid fa-eye"></i>
+                                    </div>
+                                {% endif %}
+
+                                {% if field_name in missing_fields %}
+                                    <small class="text-danger">This field is required.</small>
+                                {% endif %}
+
+                                {% if field.info %}
+                                    <small class="text-secondary">{{ field.info |safe }}</small>
+                                {% endif %}
+                            </fieldset>
+                        {% endwith %}
+                    {% endfor %}
+
+                    <input type="submit" class="btn btn-dark d-inline-block mx-auto" value="Sign in">
+
+                    {% if login_error_message %}
+                        <p class="text-danger mt-3">{{ login_error_message |safe }}</p>
+                    {% endif %}
+
+                </div>
+
+            </form>
+
+            <!-- REGISTER FORM -->
+            <form id="user-register" method="POST" class="col-12 col-md-6">
+                
+                {% csrf_token %}
+
+                <input type="hidden" name="form_type" value="register">
+
+                <div class="d-flex flex-column align-items-center p-3">
+                    <h2 class="mb-3">Sign up</h2>
+                    {% for field in register_form %}
+                        {% with "register_"|add:field.name as field_name %}
+                            <fieldset class="w-100 mb-3">
+                                <label for="{{ field_name }}">{{ field.label }}</label>
+
+                                {% if "password" in field_name %}
+                                    <div class="password-input-wrapper">
+                                {% endif %}
+
+                                    <input
+                                        class="{{ field.class }} {% if field_name in missing_fields %}border-danger{% endif %}"
+                                        type="{{ field.type }}"
+                                        name="{{ field_name }}"
+                                        id="{{ field_name }}"
+                                        {% if field_name in form_fields and "password" not in field_name %}
+                                            value="{{ form_fields|get_item:field_name }}"
+                                        {% endif %}
+                                    >
+
+                                {% if "password" in field_name %}
+                                        <i class="show-password-icon fa-solid fa-eye"></i>
+                                    </div>
+                                {% endif %}
+
+
+                                {% if field_name in missing_fields %}
+                                    <small class="text-danger">This field is required.</small>
+                                {% endif %}
+
+                                {% if field.info %}
+                                    <small class="text-secondary">{{ field.info |safe }}</small>
+                                {% endif %}
+                            </fieldset>
+                        {% endwith %}
+                    {% endfor %}
+
+                    <input type="submit" class="btn btn-dark d-inline-block mx-auto" value="Sign up">
+
+                    {% if register_error_message %}
+                        <p class="text-danger mt-3">{{ register_error_message |safe }}</p>
+                    {% endif %}
+                </div>
+            </form>
+
+        </div>
+    </div>
+</div>
+
+<style>
+    .password-input-wrapper {
+        position: relative;
+    }
+
+    .show-password-icon {
+        position: absolute;
+        right: 10px;
+        top: 10px;
+        cursor: pointer;
+    }
+
+    .login-container {
+        width: 350px;
+        max-width: 100%;
+    }
+
+    @media(min-width: 768px) {
+        .login-container {
+            width: 700px;
+        }
+    }
+</style>
+
+<script>
+    Array.from(document.getElementsByClassName("show-password-icon")).forEach(selectedIcon => {
+        selectedIcon.addEventListener("click", () => {
+            // Get password inputs from the form:
+            let passwordInputs = Array.from(event.target.closest("form").querySelectorAll("input"));
+            passwordInputs = passwordInputs.filter(input => input.id.includes("password"))
+
+            // Get show password icons from the form:
+            const showPasswordIcons = Array.from(event.target.closest("form").getElementsByClassName("show-password-icon"));
+
+            // Passwords are already showing:
+            if ( selectedIcon.classList.contains("show") ) {
+
+                showPasswordIcons.forEach(showPasswordIcon => {
+                    showPasswordIcon.classList.remove("show");
+                    showPasswordIcon.classList.remove("fa-eye-slash");
+                    showPasswordIcon.classList.add("fa-eye");
+                })
+                passwordInputs.forEach(input => input.type = "password");
+
+            // Show the password(s)
+            } else {
+                
+                showPasswordIcons.forEach(showPasswordIcon => {
+                    showPasswordIcon.classList.add("show");
+                    showPasswordIcon.classList.remove("fa-eye");
+                    showPasswordIcon.classList.add("fa-eye-slash");
+                });
+                passwordInputs.forEach(input => input.type = "text");
+            }
+
+            
+        });
+    });
+
+    const registerPasswordElement  = document.getElementById("register_password");
+    const passwordMinCharacters    = document.getElementById("password-min-characters");
+    const passwordLowercase        = document.getElementById("password-lowercase");
+    const passwordUppercase        = document.getElementById("password-uppercase");
+    const passwordNumber           = document.getElementById("password-number");
+    const passwordStrangeCharacter = document.getElementById("password-strange-character");
+
+    if ( registerPasswordElement ) {
+        registerPasswordElement.addEventListener("keyup", () => {
+            const { value } = registerPasswordElement;
+
+            // Minimum amount of characters:
+            if ( value.length >= 8 ) {
+                passwordMinCharacters.classList.add("text-success")
+            } else {
+                passwordMinCharacters.classList.remove("text-success")
+            }
+
+            // Lowercase:
+            if ( /[a-z]/.test(value) ) {
+                passwordLowercase.classList.add("text-success")
+            } else {
+                passwordLowercase.classList.remove("text-success")
+            }
+
+            // Uppercase:
+            if ( /[A-Z]/.test(value) ) {
+                passwordUppercase.classList.add("text-success")
+            } else {
+                passwordUppercase.classList.remove("text-success")
+            }
+
+            // Uppercase:
+            if ( /[0-9]/.test(value) ) {
+                passwordNumber.classList.add("text-success")
+                console.log("pass number")
+            } else {
+                passwordNumber.classList.remove("text-success")
+            }
+
+            // Strange character:
+            if ( /[!@#$%&/()_-]/.test(value) ) {
+                passwordStrangeCharacter.classList.add("text-success")
+            } else {
+                passwordStrangeCharacter.classList.remove("text-success")
+            }
+        });
+    }
+</script>
+
+{% include "dashboard/footer.html" %}
