@@ -2,8 +2,10 @@ from django.contrib.auth import authenticate, login
 from django.shortcuts import render, redirect
 from django.contrib.auth.models import User
 from django.conf import settings
-from endpoint.models import Verification
+from dashboard.models import Verification
 from django.urls import reverse
+
+from utils import get_random_string
 
 import re
 import requests
@@ -47,12 +49,7 @@ def is_password_valid(password):
 def login_user(request, template, context, form_fields):
     
     # Get username and password from form
-    try:
-        username, password = form_fields.values()
-    except Exception as e:
-        print("Error unpacking values from form fields object:", e)
-        context["login_error_message"] = "Faltan campos necesarios para iniciar sesión."
-        return render(request, template, context)
+    username, password = form_fields.values()
     
     # Check that is reigstered
     if not user_exists(username):
@@ -74,14 +71,15 @@ def login_user(request, template, context, form_fields):
     try:
         if not user.verification.is_verified:
             context["login_error_message"] = "La cuenta no está verificada. <a style='text-decoration: underline;' href='%s'>Haz click aquí para reenviar el correo de verificación.</a>" % reverse("dashboard:verification_form")
-            return render(request, template, context)
+            
         
     except Verification.DoesNotExist:
         if user.is_superuser:
             pass
         
         else:
-            return redirect("dashboard:login")
+            context["login_error_message"] = "La cuenta no está verificada. <a style='text-decoration: underline;' href='%s'>Haz click aquí para reenviar el correo de verificación.</a>" % reverse("dashboard:verification_form")
+            return render(request, template, context)
     
     login(request, user)
     
@@ -127,7 +125,7 @@ def register_user(request, template, context, form_fields):
     user = User.objects.create_user(username, email, password)
     user.save()
     
-    user_verification = Verification(user=user)
+    user_verification = Verification(user=user, code=get_random_string(settings.VERIFICATION_CODE_LENGTH))
     user_verification.save()
     send_verification_email(user)
     

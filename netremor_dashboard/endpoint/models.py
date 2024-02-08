@@ -2,8 +2,6 @@ from django.db import models
 from django.contrib import admin
 from django.utils import timezone
 from django.conf import settings
-from django.contrib.auth.models import User
-from utils import get_random_string
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
@@ -48,7 +46,7 @@ class Record(models.Model):
         return "%s (%s)" % (self.subject.name, self.get_type_display())
     
     RECORD_TYPES = [
-        ("ambulatory", "Ambulatory"),
+        ("ambulatorya", "Ambulatory"),
         ("continuous", "Continuous"),
         ("finger_tap", "Finger Tap")
     ]
@@ -57,31 +55,40 @@ class Record(models.Model):
     type     = models.CharField(max_length=20, choices=RECORD_TYPES)
     added_on = models.DateTimeField(default=timezone.now)
     
-class DataFile(models.Model):
+class Datafile(models.Model):
     def __str__(self):
         return self.name
     
     record           = models.ForeignKey("Record", models.CASCADE)
     name             = models.CharField(max_length=255)
     sensor           = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True)
-    task_id          = models.CharField(max_length=255, null=True)
-    task_name        = models.CharField(max_length=255, null=True)
-    task_description = models.TextField(null=True)
-    trial            = models.IntegerField(null=True)
     
+class Task(models.Model):
+    def __str__(self):
+        return self.name
 
-@receiver(post_delete, sender=DataFile)
+    id          = models.CharField(max_length=255, primary_key=True)
+    name        = models.CharField(max_length=255, null=True)
+    description = models.TextField(null=True)
+    
+    
+class Datafile_task_rel(models.Model):
+    
+    record    = models.ForeignKey("Record", models.CASCADE)
+    datafile  = models.ForeignKey("Datafile", models.CASCADE)
+    task      = models.ForeignKey("Task", models.CASCADE)
+    trial     = models.IntegerField(null=True)
+    starts_at = models.DateTimeField(null=True)
+    ends_at   = models.DateTimeField(null=True)
+
+
+@receiver(post_delete, sender=Datafile)
 def signal_data_file_deleted(sender, instance, using, **kwargs):
-    """When a DataFile object is deleted, delete its corresponding file in the system.
+    """When a Datafile object is deleted, delete its corresponding file in the system.
 
     Args:
-        instance: the DataFile instance that has been deleted.
+        instance: the Datafile instance that has been deleted.
     """
-    data_file_path = os.path.join(settings.DATA_FILES_DIR, instance.name)
+    data_file_path = os.path.join(settings.DATAFILES_DIR, instance.name)
     if os.path.isfile(data_file_path):
         os.remove(data_file_path)
-    
-class Verification(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
-    code = models.CharField(max_length=256, default=get_random_string(settings.VERIFICATION_CODE_LENGTH))
-    is_verified = models.BooleanField(default=False)

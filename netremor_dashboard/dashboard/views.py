@@ -1,7 +1,7 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.http import HttpResponse, Http404, HttpResponseBadRequest, HttpResponseServerError
 from django.template import loader
-from endpoint.models import Subject, Record, DataFile
+from endpoint.models import Subject, Record, Datafile, Task
 from django.conf import settings
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
@@ -206,10 +206,10 @@ def records(request, subject_id):
     except Record.DoesNotExist:
         pass
     
-    ambulatory_records = subject.record_set.filter(type = "ambulatory")
+    ambulatory_records = subject.record_set.filter(type="ambulatory")
     if ambulatory_records:
         for record in ambulatory_records:
-            record.tasks_number = record.datafile_set.filter(task_name__isnull=False).values("task_name").distinct().count()
+            record.tasks_number = record.datafile_task_rel_set.values("task_id").distinct().count()
             
         context["ambulatory_records"] = ambulatory_records
     
@@ -225,11 +225,11 @@ def record(request, record_id):
         
         # Stuff all the record files into a zip file:
         zip_filename  = "%s-%s-%s.zip" % (record.subject.id, record.type, record.id)
-        zip_file_path = os.path.join(settings.DATA_FILES_DIR, zip_filename)
+        zip_file_path = os.path.join(settings.DATAFILES_DIR, zip_filename)
         
         with zipfile.ZipFile(zip_file_path, "w") as temp_zip:
-            for data_file in DataFile.objects.filter(record_id=record_id):
-                data_file_path = os.path.join(settings.DATA_FILES_DIR, data_file.name)
+            for data_file in Datafile.objects.filter(record_id=record_id):
+                data_file_path = os.path.join(settings.DATAFILES_DIR, data_file.name)
                 temp_zip.write(data_file_path, data_file.name)
                 
         # Send bytes of zip files as a downloadable:
@@ -247,18 +247,19 @@ def record(request, record_id):
     if request.method == "POST":
         
         if record.type == "continuous":
-            
             sensor, metric, samples, selection = json.loads(request.body).values()
             
-            data_file = record.datafile_set.get(sensor=sensor)
-            response_data = get_continuous_data_file(data_file, samples, selection)
+            print(selection)
+            
+            datafile = record.datafile_set.get(sensor=sensor)
+            response_data = get_continuous_datafile(datafile, samples, selection)
             
         elif record.type == "ambulatory":            
             params = json.loads(request.body)
             
             if params["metric"] == "raw":
                 try:
-                    response_data = get_ambulatory_data_file(params["id"])
+                    response_data = get_ambulatory_record_trial_data(record, params["taskId"], params["trial"])
                     
                 except FileNotFoundError:
                     return HttpResponseBadRequest("Requested file doesn't exists.")
@@ -303,41 +304,56 @@ def record(request, record_id):
 
 def get_ambulatory_record_tasks(record):
     
-    data_files = record.datafile_set.filter(task_name__isnull = False).values("id", "trial", "task_name", "task_description")
-
+    task_trials = record.datafile_task_rel_set.values("task_id", "trial").distinct()
     tasks = {}
-
-    for key, group in itertools.groupby(data_files, lambda item: item["task_name"]):
-        
-        for item in group:
-            item["id"] = str(item["id"])
-            
-            if key not in tasks.keys():
-                tasks[key] = {
-                    "task_name": key,
-                    "task_description": item["task_description"],
-                    "data_file_ids": {
-                        item["trial"]: [item["id"]]
-                    }
-                }
-                
-            elif item["trial"] not in tasks[key]["data_file_ids"].keys():
-                tasks[key]["data_file_ids"][item["trial"]] = [item["id"]]
-            
-            else:
-                tasks[key]["data_file_ids"][item["trial"]] += [item["id"]]
-        
-    tasks = list(tasks.values())
     
-    for task in tasks:
-        task["data_file_ids"] = sorted(task["data_file_ids"].items())
-        task["data_file_ids"] = list(map(lambda item: "-".join(item[1]), task["data_file_ids"]))
+    for task_id, group in itertools.groupby(task_trials, lambda item: item["task_id"]):
+        tasks[task_id] = {
+            "task": Task.objects.get(id=task_id),
+            "trials": list(map(lambda item: item["trial"], group)), 
+        }
         
+    return tasks.values()
+
+    # for task_id, group in itertools.groupby(tasks, lambda item: item["task_id"]):
         
+    #     for item in group:
+            
+    #         item["id"] = str(item["id"]) # datafile_id
+            
+    #         # Initialize the task:
+    #         if task_id not in tasks.keys():
+    #             tasks[task_id] = {
+    #                 "task_id": task_id,
+    #                 "task_name": item["task_name"],
+    #                 "task_description": item["task_description"],
+    #                 "data_file_ids": {
+    #                     item["trial"]: [item["id"]]
+    #                 }
+    #             }
+
+    #         # Current trial has no files yet:
+    #         elif item["trial"] not in tasks[task_id]["data_file_ids"].keys():
+    #             tasks[task_id]["data_file_ids"][item["trial"]] = [item["id"]]
+
+    #         # Append this data file id to the other one for this trial
+    #         else:
+    #             tasks[task_id]["data_file_ids"][item["trial"]] += [item["id"]]
+        
+    
+    # tasks = list(tasks.values())
+    
+    # for task in tasks:
+    #     task["data_file_ids"] = sorted(task["data_file_ids"].items())
+    #     task["data_file_ids"] = list(map(lambda item: "-".join(item[1]), task["data_file_ids"]))
+        
+    
+    # print(tasks)    
+    
     return tasks
 
 
-def get_continuous_data_file(data_file, samples, selection):
+def get_continuous_datafile(data_file, samples, selection):
     
     try:
         start_selection, end_selection = selection
@@ -346,7 +362,7 @@ def get_continuous_data_file(data_file, samples, selection):
     
     record_data = []
     
-    data_file_path = os.path.join(settings.DATA_FILES_DIR, data_file.name)
+    data_file_path = os.path.join(settings.DATAFILES_DIR, data_file.name)
     
     # Limit file reading, we are going to send the first two hours
     # If the user wants to see more, it will have to be requested
@@ -394,31 +410,29 @@ def get_continuous_data_file(data_file, samples, selection):
     
     
     
-def get_ambulatory_data_file(data_file_ids):
-    
-    data_files = DataFile.objects.filter(pk__in=data_file_ids)
+def get_ambulatory_record_trial_data(record, task_id, trial):
+
+    datafile_ids = record.datafile_task_rel_set.filter(task_id=task_id, trial=trial).values_list("datafile", flat=True)
+    datafiles    = Datafile.objects.filter(pk__in=datafile_ids)
     
     record_data = []
     
-    for data_file in data_files:
+    for datafile in datafiles:
         
-        data_file_path = os.path.join(settings.DATA_FILES_DIR, data_file.name)
+        datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
         
-
         # Limit file reading, we are going to send the first two hours
         # If the user wants to see more, it will have to be requested
-        with open(data_file_path) as file:
+        with open(datafile_path) as file:
             
             for row in csv.DictReader(file):
 
                 data_row = {}
                 
                 for key in row:
-                    data_row[key] = RECORD_PARSE[key](row[key])   
-                    
-                data_row["taskName"] = data_file.task_name
-                data_row["taskDescription"] = data_file.task_description
-                data_row["sensor"] = data_file.sensor
+                    data_row[key] = RECORD_PARSE[key](row[key])
+
+                data_row["sensor"] = datafile.sensor
 
                 record_data += [data_row]
         

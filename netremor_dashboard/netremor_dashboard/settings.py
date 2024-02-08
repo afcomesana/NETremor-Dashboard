@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR       = Path(__file__).resolve().parent.parent
-DATA_FILES_DIR = Path.joinpath(BASE_DIR, "data-files")
+DATAFILES_DIR = Path.joinpath(BASE_DIR, "data-files")
 
 SENSOR_CHOICES = [
     ("accelerometer", "Accelerometer"),
@@ -124,7 +124,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-en'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Europe/Madrid'
 
 USE_I18N = True
 

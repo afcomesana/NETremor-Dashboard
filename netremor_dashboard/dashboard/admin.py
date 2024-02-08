@@ -1,7 +1,8 @@
 from django.contrib import admin
 
 # Register your models here.
-from endpoint.models import Subject, Record, DataFile, Verification
+from endpoint.models import Subject, Record, Datafile, Task, Datafile_task_rel
+from dashboard.models import Verification
 
 
 # class SubjectAdmin(admin.ModelAdmin):
@@ -19,5 +20,7 @@ from endpoint.models import Subject, Record, DataFile, Verification
 
 admin.site.register(Subject)
 admin.site.register(Record)
-admin.site.register(DataFile)
+admin.site.register(Datafile)
 admin.site.register(Verification)
+admin.site.register(Task)
+admin.site.register(Datafile_task_rel)

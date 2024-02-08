@@ -2,7 +2,7 @@
 from django.shortcuts import render, get_object_or_404
 from django.http import HttpResponse, Http404, HttpResponseBadRequest, HttpResponseServerError, HttpResponseForbidden
 from django.template import loader
-from endpoint.models import Subject, Record, DataFile
+from endpoint.models import Subject, Record, Datafile, Task, Datafile_task_rel
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -14,6 +14,9 @@ from .utils import save_subject
 import os
 import re
 import json
+from csvsort import csvsort
+from datetime import datetime
+from pytz import timezone
 from dotenv import load_dotenv
 import utils
 
@@ -42,15 +45,22 @@ def ambulatory(request):
     try:
         post_fields = request.POST.copy()
         
-        tasks = post_fields.pop("tasks")[0]
-        tasks = json.loads(tasks)
+        recorded_tasks = post_fields.pop("recordedTasks")[0]
+        recorded_tasks = json.loads(recorded_tasks)
         
-        if len(tasks) == 0: return HttpResponseBadRequest("No hay tareas asociadas.")
+        if len(recorded_tasks) == 0:
+            return HttpResponseBadRequest("No hay tareas asociadas.")
         
     except KeyError:
-        return HttpResponseBadRequest("Falta el campo 'tasks' en la solicitud.")
+        return HttpResponseBadRequest("Falta el campo 'recordedTasks' en la solicitud.")
     
-    record_added_on = post_fields.pop("recordAddedOn")[0]
+    try:
+        record_added_on = post_fields.pop("recordAddedOn")[0]
+        
+    except KeyError:
+        return HttpResponseBadRequest("Falta el campo 'recordAddedOn' en la solicitud.")
+    
+    save_tasks(recorded_tasks)
     
     # Save/update subject in database:
     try:
@@ -67,20 +77,19 @@ def ambulatory(request):
         return HttpResponseServerError
 
     # Save data files and corresponding tasks:
-    for index, task in enumerate(tasks):
+    for index, task in enumerate(recorded_tasks):
         for sensor in SENSOR_NAMES:
             try:
                 # Store the file in the data files directory:
-                file     = request.FILES[task["%sFilename" % sensor]]
-                
+                file      = request.FILES[task["%sFilename" % sensor]]
                 filename  = [utils.str2filename(subject.id), record_added_on, sensor, str(index)]
                 
-                if "taskName" in task.keys():
-                    filename += [utils.str2filename(task["taskName"])]
+                if "taskId" in task.keys():
+                    filename += [utils.str2filename(task["taskId"])]
                     
                 filename  = "-".join(filename)
                 filename += ".csv"
-                filepath  = os.path.join(settings.DATA_FILES_DIR, filename)
+                filepath  = os.path.join(settings.DATAFILES_DIR, filename)
                 
                 if os.path.exists(filepath):
                     print("File", filename, "already exists. Data not saved.")
@@ -89,26 +98,17 @@ def ambulatory(request):
                 default_storage.save(filepath, file)
                 
                 # Store data file instance in database:
-                data_file_args = {
-                    "record": record,
-                    "name": filename,
-                    "sensor": sensor,
-                }
-                
-                if "trial" in task.keys():
-                    data_file_args["trial"] = task["trial"]
+                datafile = Datafile(record=record, name=filename, sensor=sensor)
+                datafile.save()
                 
                 if "taskId" in task.keys():
-                    data_file_args["task_id"] = task["taskId"]
+                    Datafile_task_rel(
+                        record=record,
+                        datafile=datafile,
+                        task=Task.objects.get(id=task["taskId"]),
+                        trial=task["trial"]
+                    ).save()
                     
-                    if "taskName" in task.keys():
-                        data_file_args["task_name"] = task["taskName"]
-                        
-                    if "taskDescription" in task.keys():
-                        data_file_args["task_description"] = task["taskDescription"]
-
-                data_file = DataFile(**data_file_args)
-                data_file.save()
                 
             except KeyError:
                 print("Current task doesn't have %s file" % sensor)
@@ -116,6 +116,7 @@ def ambulatory(request):
 
     if record.datafile_set.count() == 0:
         record.delete()
+        return HttpResponseBadRequest("This record is already saved.")
         
         
     return HttpResponse("OK")
@@ -138,8 +139,15 @@ def continuous(request):
     except KeyError:
         return HttpResponseForbidden("Missing api key.")
     
-    
     post_fields = request.POST.copy()
+    
+    try:
+        # Save recorded tasks during continuous record:
+        recorded_tasks = post_fields.pop("recordedTasks")[0]
+        recorded_tasks = json.loads(recorded_tasks)
+        save_tasks(recorded_tasks)
+    except KeyError:
+        recorded_tasks = []
     
     # Save/update subject in database:
     try:
@@ -157,30 +165,38 @@ def continuous(request):
             # Do not save files whose sensor could not be identified:
             sensor = next(filter(lambda sensor_name: sensor_name in file, SENSOR_NAMES), None)
             if sensor is None:
+                print("Skipping not recognized sensor file.")
                 continue
             
-            stored_filename = record.datafile_set.filter(sensor = sensor)
-
-            # No files yet:
-            if stored_filename.count() == 0:
+            # Get or create database instance:
+            try:
+                datafile = record.datafile_set.get(sensor = sensor)
+            except Datafile.DoesNotExist:
                 filename = "%s-%s" % (subject.id, file)
                 filename = re.sub(r'\.dat$', ".csv", filename)
                 
                 # Store data file instance in database:
-                data_file_args = {
+                datafile_args = {
                     "record": record,
                     "name": filename,
                     "sensor": sensor
                 }
                 
-                data_file = DataFile(**data_file_args)
-                data_file.save()
+                datafile = Datafile(**datafile_args)
+                datafile.save()
                 
-            # DataFile already exists:
-            else:
-                filename = stored_filename.get(sensor=sensor).name
+            # Save tasks recorded in continuous record:
+            if len(recorded_tasks) > 0:
+                for task in recorded_tasks:
+                    Datafile_task_rel(
+                        record=record,
+                        datafile=datafile,
+                        task=Task.objects.get(id=task["taskId"]),
+                        starts_at=datetime.fromtimestamp(task["startsAt"]/1000).astimezone(timezone(settings.TIME_ZONE)).isoformat(sep=" ", timespec="milliseconds"),
+                        ends_at=datetime.fromtimestamp(task["endsAt"]/1000).astimezone(timezone(settings.TIME_ZONE)).isoformat(sep=" ", timespec="milliseconds"),
+                    ).save()
 
-            filepath = os.path.join(settings.DATA_FILES_DIR, filename)
+            filepath = os.path.join(settings.DATAFILES_DIR, datafile.name)
             
             # First creating this file
             if not os.path.exists(filepath):
@@ -188,7 +204,7 @@ def continuous(request):
                 
             # File exists, append incoming content to the existing one
             else:
-                temporary_filepath = os.path.join(settings.DATA_FILES_DIR, "temporary-%s" % filename)
+                temporary_filepath = os.path.join(settings.DATAFILES_DIR, "temporary-%s" % datafile.name)
                 default_storage.save(temporary_filepath, request.FILES[file])
                 
                 incoming_file = open(temporary_filepath, "r")
@@ -209,13 +225,29 @@ def continuous(request):
                 with open(filepath, "a") as stored_file:
                     stored_file.write(incoming_file_content)
                     
+            # Sort the data based on timestamp (4th column, columns 0 indexed)
+            csvsort(filepath, [3])
+            
     except Exception as e:
+        print("Error during continuous record saving process:", e)
         return HttpResponseServerError("Unexpected error in server.")
         
 
     return HttpResponse(200)
 
 
+def save_tasks(incoming_tasks):
+    # Create list with each item being the arguments for creating the task that is not yet in the database
+    current_stored_tasks = Task.objects.values_list("id", flat=True).distinct()
+    tasks_to_store       = list(map(lambda task: {
+        "id": task["taskId"],
+        "name": task["taskName"] if "taskName" in task.keys() else None,
+        "description": task["taskDescription"] if "taskDescription" in task.keys() else None,
+    }, filter(lambda incoming_task: "taskId" in incoming_task.keys() and incoming_task["taskId"] not in current_stored_tasks, incoming_tasks)))
+    
+    # Storing those tasks that do not exist in the database:
+    for task in tasks_to_store:
+        Task(**task).save()
 
 def get_ambulatory_record_filename(basename, extension = "csv", index = 0):
     

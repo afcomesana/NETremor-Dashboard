@@ -9,9 +9,9 @@ const RECORD_TYPE = document.getElementById("record-type").value;
 if ( RECORD_TYPE == "ambulatory" ) {
 
     // Close the other task containers when a different task is selected:
-    const taskNamesContainers = Array.from(document.getElementsByClassName("task-name-container"));
+    const taskNamesContainers   = Array.from(document.getElementsByClassName("task-name-container"));
     const taskOptionsContainers = Array.from(document.getElementsByClassName("task-options-container"));
-    const trialOptions   = Array.from(document.getElementsByClassName("trial-option"));
+    const trialOptions          = Array.from(document.getElementsByClassName("trial-option"));
     
     taskNamesContainers.forEach(task => task.addEventListener("click", () => {
         const taskToExpandId = task.getAttribute("aria-controls");

@@ -32,17 +32,18 @@
                                 aria-expanded="false"
                                 aria-controls="task-{{ forloop.counter }}">
                                 
-                                <b>{% if task.task_description != "" %}{{ task.task_description }}{% else %}{{ task.task_name }}{% endif %}</b>
+                                <b>{{ task.task.name }}</b>
                                 <i class="task-name-collapse-icon fa-solid fa-chevron-down"></i>
                             </a>
 
                             <!-- OPTIONS AVAILABLE TO PLOT -->
                             <div class="task-options-container collapse border-bottom py-2" id="task-{{ forloop.counter }}">
 
-                                {% for ids in task.data_file_ids %}
+                                {% for trial in task.trials %}
                                 
                                     <div
-                                        data-id="{{ ids }}"
+                                        data-trial="{{ trial }}"
+                                        data-id="{{ task.task.id }}"
                                         class="trial-option d-inline-block badge bg-dark text-white cursor-pointer mb-2">
                                         Trial {{ forloop.counter }}
                                     </div>
@@ -109,8 +110,6 @@
                         </div>
 
                     </div>
-
-                    <input type="hidden" id="plot-selection" value="">
                 </div>
 
                 <!-- CHART -->
@@ -135,8 +134,10 @@
 <script type="module" src="{% static 'dashboard/Plotter.js' %}"></script>
 <script type="module" src="{% static 'dashboard/record.js' %}"></script>
 <style>
+
     #record-chart-container {
         min-height: 200px;
+        cursor: grab;
     }
 
     .trial-option, .axis-filter, .sensor-filter {

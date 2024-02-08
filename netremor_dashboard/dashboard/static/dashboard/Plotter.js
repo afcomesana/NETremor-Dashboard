@@ -5,38 +5,44 @@ export default class Plotter {
 
     constructor() {
 
-        // Find div container where the chart will be displayed:
+        // -----------------------------------
+        // CHART ELEMENT, SIZES AND FEATURES:
+        // -----------------------------------
         this.recordChartContainer  = document.getElementById("record-chart-container");
-        this.chartGroupContainerId = "record-chart-container-svg"
+        this.chartGroupContainerId = "record-chart-container-group"
+        this.xAxisElementId        = "chart-x-axis";
+        this.yAxisElementId        = "chart-y-axis";
+        this.yAxisElementTitleId   = "y-axis-title";
+        this.axisElements          = Array.from(document.getElementsByClassName("axis-filter"))
+        this.axis                  = this.axisElements.map(axis => axis.id.split("-")[1]);
 
-        // Milliseconds that two samples have to apart in order to be considered to belong to different chunks
-        this.lineChunkThreshold = 2000
-
-        // Define chart size:
         this.margin = {
             top: 10,
             right: 30,
             bottom: 30,
-            left: 0
+            left: 50
         };
-
         this.width  = this.recordChartContainer.clientWidth - this.margin.left - this.margin.right;
         this.height = 400 - this.margin.top - this.margin.bottom;
 
-        this.transitionMillis = 500;
+        this.lineChunkThreshold = 2000;
+        this.transitionMillis   = 500;
+        this.lineStrokeWidth    = 1.5;
+        this.zoomScale          = 1;
 
-        this.xAxisId      = "chart-x-axis";
-        this.yAxisId      = "chart-y-axis";
-        this.yAxisTitleId = "y-axis-title";
-
+        // --------------------------------
+        // FILTERS AND CHART OPTIONS:
+        // --------------------------------
         this.trialOption    = null;
         this.selectedSensor = null;
         this.selectedPlot   = null;
         this.selectedMetric = null;
+        this.plotSelection  = [0,1];
 
-        this.axisElements = Array.from(document.getElementsByClassName("axis-filter"))
-        this.axis = this.axisElements.map(axis => axis.id.split("-")[1]);
 
+        // -------------------------------------------------------
+        // AWARENESS OF THE TYPE OF RECORD THAT IS BEING PLOTTED:
+        // -------------------------------------------------------
         this.RECORD_TYPE = document.getElementById("record-type")
         if ( !this.RECORD_TYPE ) {
             throw "Could not define record type.";
@@ -50,24 +56,26 @@ export default class Plotter {
 
     initChart = () => {
 
-        if ( document.getElementById(this.chartGroupContainerId) ) return
-
+        // This will only be called one time during all the DOM lifetime of the chart:
+        if ( document.getElementById(this.chartGroupContainerId) ) {
+            return;
+        }
 
         // SVG that will contain the chart:
         this.svg = d3.select(this.recordChartContainer)
-            .html(null)
+            .html(null) // Wipe out anything that could be rendered in the chart's area
             .append("svg")
             .attr("width", this.width + this.margin.left + this.margin.right)
             .attr("height", this.height + this.margin.top + this.margin.bottom)
-            .append("g")
-            .attr("id", this.chartGroupContainerId)
-            .attr("style", "overflow:scroll")
+            .attr("id", "record-chart-container-svg");
 
-        console.log("wheel event listener")
-        document.getElementById(this.chartGroupContainerId).addEventListener("wheel", this.updateChart)
+        this.chartGroupContainer = this.svg.append("g")
+            .attr("id", this.chartGroupContainerId)
+            .attr("pointer-events", "all")
+            .attr("transform", `translate(${this.margin.left}, ${this.margin.top})`);
 
         // Clip path:
-        this.clip = this.svg.append("defs")
+        this.clip = this.chartGroupContainer.append("defs")
             // The <defs> element is used to store graphical objects
             // that will be used at a later time. Objects created inside
             // a <defs> element are not rendered directly. To display
@@ -87,8 +95,23 @@ export default class Plotter {
 
         
         // Group that will contain the lines
-        this.lineGroup = this.svg.append("g")
-            .attr("clip-path", "url(#clip)")
+        this.lineGroup = this.chartGroupContainer.append("g")
+            .attr("id", "record-line-group")
+            .attr("pointer-events", "all")
+            .attr("clip-path", "url(#clip)");
+
+        this.setupZoom();
+    }
+
+    setupZoom() {
+
+        this.zoom = d3.zoom()
+            .scaleExtent([1/(this.zoomScale), 20])
+            .translateExtent([[0,0], [this.width + this.margin.left + this.margin.right, this.height + this.margin.top + this.margin.bottom]])
+            .on("zoom", this.updateChart);
+
+    
+        this.svg.call(this.zoom);
     }
 
     getCsrfToken = () => {
@@ -109,7 +132,6 @@ export default class Plotter {
         this.selectedSensor = document.querySelector(".sensor-filter.selected");
         this.selectedMetric = document.querySelector(".metric-option.selected");
         this.selectedAxis   = Array.from(document.querySelectorAll(".axis-filter.selected"));
-        this.plotSelection  = document.getElementById("plot-selection").value.split("-").map(parseFloat);
 
         if ( !this.trialOption && this.IS_AMBULATORY_RECORD ) {
             console.error("No option selected");
@@ -134,24 +156,24 @@ export default class Plotter {
     }
 
     loadData = async () => {
-
         this.getPlotOptions();
 
         if ( this.RECORD_TYPE == "ambulatory" ) {
 
-            let { id } = this.trialOption.dataset;
+            let { trial, id: taskId } = this.trialOption.dataset;
 
-            if ([this.selectedMetric, id].join("-") != this.selectedPlot) {
+            if ([this.selectedMetric, trial].join("-") != this.selectedPlot) {
     
                 // Update selected plot option
-                this.selectedPlot = [this.selectedMetric, id].join("-");
-
-                id = id.split("-").map(item => parseInt(item))
+                this.selectedPlot = [this.selectedMetric, trial].join("-");
 
                 this.data = await this.fetchData({
                     metric: this.selectedMetric,
-                    id
+                    trial,
+                    taskId
                 });
+
+                console.log(this.data)
             }
 
             this.sensorData = this.data.filter(sample => sample.sensor == this.selectedSensor);
@@ -159,7 +181,6 @@ export default class Plotter {
         } else if ( this.RECORD_TYPE == "continuous" ) {
 
             const selectedPlot = [this.selectedMetric, this.selectedSensor, this.plotSelection.join("-")].join("-");
-            console.log(`selected plot: ${selectedPlot}`);
 
             if ( selectedPlot != this.selectedPlot ) {
 
@@ -196,6 +217,8 @@ export default class Plotter {
 
             this.sensorData = this.data;
         }
+
+        console.log(this.sensorData)
     }
 
 
@@ -236,55 +259,55 @@ export default class Plotter {
     renderChart = async () => {
 
         if ( !this.sensorData ) {
-            this.recordChartContainer.innerHTML = "No hay datos."
+            this.recordChartContainer.innerHTML = "No hay datos.";
             return
         }
-
 
         // If there is something to plot, initialize the chart.
         this.initChart();
 
+        // this.setupZoom();
+
         // Show colors of the lines
         this.updateLegend();
         
+        console.log(`x axis extent: ${d3.extent(this.sensorData, item => new Date(item.timestamp))}`)
+
         // X-Axis
         this.xScale = d3.scaleTime()
             .domain(d3.extent(this.sensorData, item => new Date(item.timestamp)))
             .range([0, this.width]);
 
-        document.getElementById(this.xAxisId)?.remove()
-        this.xAxis  = this.svg.append("g")
-            .attr("id", this.xAxisId)
+        this.xAxis = d3.axisBottom(this.xScale).tickFormat(d3.timeFormat("%H:%M:%S"))
+
+        document.getElementById(this.xAxisElementId)?.remove()
+        this.xAxisElement  = this.chartGroupContainer.append("g")
+            .attr("id", this.xAxisElementId)
             .attr("transform", `translate(0, ${this.height})`)
-            .call(d3.axisBottom(this.xScale).tickFormat(d3.timeFormat("%H:%M:%S")));
+            .call(this.xAxis);
         
+        
+        this.xAxisElementWidth   = this.xAxisElement.node().getBoundingClientRect().width;
+        this.xAxisElementOffsetX = this.xAxisElement.node().getBoundingClientRect().x;
 
         // Y-Axis
         this.yScale = d3.scaleLinear()
-            // TODO: Change getDataDomain function to take into account
-            // only selected axis
             .domain(this.getDataDomain())
             .range([this.height, 0]);
 
-        document.getElementById(this.yAxisId)?.remove();
-        this.yAxis  = this.svg.append("g")
-            .attr("id", this.yAxisId)
-            .call(d3.axisLeft(this.yScale));
+        this.yAxis = d3.axisLeft(this.yScale);
+
+        document.getElementById(this.yAxisElementId)?.remove();
+        this.yAxisElement = this.chartGroupContainer.append("g")
+            .attr("id", this.yAxisElementId)
+            .call(this.yAxis);
 
         
-        document.getElementById(this.yAxisTitleId)?.remove();
-        this.svg.append("text")
-            .attr("id", this.yAxisTitleId)
+        document.getElementById(this.yAxisElementTitleId)?.remove();
+        this.chartGroupContainer.append("text")
+            .attr("id", this.yAxisElementTitleId)
             .attr("transform", `translate(-30, ${Math.floor(this.height/2)}) rotate(-90) `)
             .html(axisTitles[this.selectedSensor]);
-    
-        const { width: yAxisWidth }      = document.getElementById(this.yAxisId).getBoundingClientRect()
-        const { width: yAxisTitleWidth } = document.getElementById(this.yAxisTitleId).getBoundingClientRect()
-        
-        d3.select(`#${this.chartGroupContainerId}`)
-            .attr("transform", `translate(${Math.ceil(yAxisWidth + yAxisTitleWidth)}, ${this.margin.top})`)
-
-
 
         // Plot:
         const linesToFlush = Array.from(this.recordChartContainer.getElementsByClassName("line"));
@@ -387,63 +410,41 @@ export default class Plotter {
             .attr("class", `line ${sensor} ${axis} ${this.selectedAxis.includes(axis) ? "" : "opacity-0"}`)
             .attr("fill", "none")
             .attr("stroke", colorCode[`${sensor}-${axis}`])
-            .attr("stroke-width", 1.5)
+            .attr("stroke-width", this.lineStrokeWidth)
             .attr("d", d3.line()
                 .x(d => this.xScale(d.timestamp))
                 .y(d => this.yScale(d[axis]))
             )
     }
 
-    updateChart = async event => {
-        console.log(event)
-        // const { selection } = event;
 
-        // if ( !selection ) {
-        //     if ( !this.idledTimeout ) return this.idledTimeout = setTimeout(this.idled, 350);
-        //     this.xScale.domain(d3.extent(this.sensorData, d => new Date(parseInt(d.timestamp))));
+    updateChart = event => {
+        clearTimeout(this.updateChartTimeout);
+
+        this.updateChartTimeout = setTimeout(async () => {
+
+            const { left: lineGroupLeft, width: lineGroupWidth } = this.lineGroup.node().getBoundingClientRect();
+
+            const { left: recordChartContainerLeft, right: recordChartContainerRight } = this.recordChartContainer.getBoundingClientRect();
+            
+            this.plotSelection = [
+                Math.max(0, (recordChartContainerLeft - lineGroupLeft)/lineGroupWidth),
+                Math.min(1, (recordChartContainerRight - lineGroupLeft)/lineGroupWidth),
+            ]
+
+            await this.loadData();
+            this.renderChart();
+            // Array.from(this.lineGroup.node().getElementsByClassName(".line"))
+            //     .forEach(line => {
+            //         const axis = line.id.split("-")[1];
+            //         line.d = this.sensorData.map(item => [this.xScale(item.timestamp), this.yScale(item[axis])]);
+            //     });
+        }, 500);
 
 
-        // // Fetch again to get amplified data:
-        // } else {
-
-        //     // Fetch new samples for the new interval:
-        //     if ( this.IS_CONTINUOUS_RECORD ) {
-        //         let [startSelection, endSelection] = selection;
-        //         document.getElementById("plot-selection").value = `${startSelection/this.width}-${endSelection/this.width}`
-
-        //         await this.loadData();
-        //         this.renderChart();
-        //     }
-
-        //     this.xScale.domain([this.xScale.invert(selection[0]), this.xScale.invert(selection[1])]);
-        //     this.lineGroup.select(".brush").call(this.brush.move, null);
-        // }
-
-        // this.xAxis.transition().duration(this.transitionMillis).call(d3.axisBottom(this.xScale))
-
-        // Array.from(document.getElementsByClassName("line")).forEach(line => {
-        //     const axis = line.id.split("-")[1]
-        //     d3.select(line)
-        //         .transition()
-        //         .duration(this.transitionMillis)
-        //         .attr("d", d3.line()
-        //             .x(d => this.xScale(d.timestamp))
-        //             .y(d => this.yScale(d[axis]))
-        //         )
-        // });
-
-        // // Restart original data with no specific time selected
-        // this.svg.on("dbclick", () => {
-        //     console.log("db click event")
-        //     this.xScale.domain(d3.extent(this.data, d => d.timestamp))
-        //     this.xAxis.transition().call(d3.axisBottom(this.xScale))
-        //     this.lineGroup.select(".line")
-        //         .transition()
-        //         .attr("d", d3.line()
-        //             .x(d => this.xScale(d.timestamp))
-        //             .y(d => this.yScale(d.x))
-        //         )
-        // });
+        this.lineGroup.selectAll(".line")
+            .attr("style", `transform: translate(${event.transform.x}px, 0) scaleX(${event.transform.k})`);
+        this.xAxisElement.call(this.xAxis.scale(event.transform.rescaleX(this.xScale)));
     }
 
     
