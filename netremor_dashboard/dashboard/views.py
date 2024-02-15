@@ -18,6 +18,8 @@ import json
 import math
 import itertools
 import zipfile
+from pytz import timezone
+import time
 
 RECORD_PARSE = {
     "x": float,
@@ -29,6 +31,7 @@ RECORD_PARSE = {
 
 @login_required
 def index(request):
+    
     subjects_list = Subject.objects.all()
     
     # template = loader.get_template("dashboard/index.html")
@@ -218,12 +221,31 @@ def records(request, subject_id):
 
 @login_required
 def record(request, record_id):
-    record     = get_object_or_404(Record, pk=record_id)
+    """
+    Get information and files data about a certain record.
+    Several different requests are meant to be handled by this view:
+    1) GET request when record page is first loaded
+    2) GET request to download the data from the record
+    3.a) POST request to get the data from a certain task
+    3.b) POST request to get the data from in a selected range
 
-    # Download files of the record:
+    Args:
+        request (WSGIRequest): default arguments received by django views
+        record_id (Int): ID of the requested record
+
+    Returns:
+        HttpResponse: 
+        1) HTML document without a chart and with the information of all the tasks related to this record.
+        2) ZIP file containing all of the data belonging to this record
+        3) JSON with the the data of the sensors
+    """
+    
+    record = get_object_or_404(Record, pk=record_id)
+
+    # 2)
     if "download" in request.GET.keys():
         
-        # Stuff all the record files into a zip file:
+        # Stuff all the record files into a temporary zip file:
         zip_filename  = "%s-%s-%s.zip" % (record.subject.id, record.type, record.id)
         zip_file_path = os.path.join(settings.DATAFILES_DIR, zip_filename)
         
@@ -231,8 +253,22 @@ def record(request, record_id):
             for data_file in Datafile.objects.filter(record_id=record_id):
                 data_file_path = os.path.join(settings.DATAFILES_DIR, data_file.name)
                 temp_zip.write(data_file_path, data_file.name)
+             
                 
-        # Send bytes of zip files as a downloadable:
+            # For continuous records, add a CSV with the information regarding
+            # start and finish timestamps for each task in the record
+            if record.type == "continuous":
+                
+                record_tasks = record.datafile_task_rel_set.values("task_id", "starts_at", "ends_at").distinct()
+                record_tasks = list(map(lambda task: "%s,%s,%s" % (
+                    task["task_id"],    
+                    int(task["starts_at"].timestamp() * 1000),    
+                    int(task["ends_at"].timestamp() * 1000),
+                ), record_tasks))
+                
+                temp_zip.writestr("%s-tasks.csv" % record.subject.id, "\n".join(record_tasks))
+                            
+        # Send bytes of zip files as a downloadable and remove the zip file:
         with open(zip_file_path, "rb") as temp_zip:
             
             response = HttpResponse(temp_zip.read(), content_type="application/octet-stream")
@@ -243,16 +279,18 @@ def record(request, record_id):
             return response
 
     
-    # REQUEST ONLY THE DATA OF THE SENSORS:
+    # 3)
     if request.method == "POST":
         
+        # 3.b)
         if record.type == "continuous":
-            sensor, metric, samples, selection = json.loads(request.body).values()
             
-            print(selection)
+            print(request.body)
+            sensor, metric, samples, time_range = json.loads(request.body).values()
             
-            datafile = record.datafile_set.get(sensor=sensor)
-            response_data = get_continuous_datafile(datafile, samples, selection)
+            # Since files in the continuous case are much bigger, we only read one of the sensors:
+            datafile       = record.datafile_set.get(sensor=sensor)
+            response_data  = get_continuous_datafile(datafile, samples, time_range)
             
         elif record.type == "ambulatory":            
             params = json.loads(request.body)
@@ -293,116 +331,109 @@ def record(request, record_id):
     }
     
     if record.type == "ambulatory":
-        response["tasks"] = get_ambulatory_record_tasks(record)
+        columns  = ["trial"]
+        callback = lambda item: item["trial"]
+        
+    elif record.type == "continuous":
+        columns  = ["starts_at", "ends_at"]
+        callback = lambda item: [
+            item["starts_at"].astimezone(timezone("Europe/Madrid")),
+            item["ends_at"].astimezone(timezone("Europe/Madrid"))
+        ]
+        
+    response["tasks"] = get_record_tasks(record, columns, callback)
     
     return render(
         request,
         "dashboard/record.html",
         response
     )
-    
 
-def get_ambulatory_record_tasks(record):
+def get_record_tasks(record, columns, callback):
+
+    columns      = list(set(["task_id"] + columns))
+    record_tasks = record.datafile_task_rel_set.values(*columns).distinct().order_by("task_id")
+    tasks        = {}
     
-    task_trials = record.datafile_task_rel_set.values("task_id", "trial").distinct()
-    tasks = {}
-    
-    for task_id, group in itertools.groupby(task_trials, lambda item: item["task_id"]):
+    for task_id, group in itertools.groupby(record_tasks, lambda item: item["task_id"]):
+                
         tasks[task_id] = {
             "task": Task.objects.get(id=task_id),
-            "trials": list(map(lambda item: item["trial"], group)), 
+            "trials": list(map(callback, group)), 
         }
         
     return tasks.values()
 
-    # for task_id, group in itertools.groupby(tasks, lambda item: item["task_id"]):
-        
-    #     for item in group:
-            
-    #         item["id"] = str(item["id"]) # datafile_id
-            
-    #         # Initialize the task:
-    #         if task_id not in tasks.keys():
-    #             tasks[task_id] = {
-    #                 "task_id": task_id,
-    #                 "task_name": item["task_name"],
-    #                 "task_description": item["task_description"],
-    #                 "data_file_ids": {
-    #                     item["trial"]: [item["id"]]
-    #                 }
-    #             }
 
-    #         # Current trial has no files yet:
-    #         elif item["trial"] not in tasks[task_id]["data_file_ids"].keys():
-    #             tasks[task_id]["data_file_ids"][item["trial"]] = [item["id"]]
+def get_continuous_datafile(datafile, samples, time_range = False):
+    """Read inertial sensor data from raw file.
 
-    #         # Append this data file id to the other one for this trial
-    #         else:
-    #             tasks[task_id]["data_file_ids"][item["trial"]] += [item["id"]]
-        
-    
-    # tasks = list(tasks.values())
-    
-    # for task in tasks:
-    #     task["data_file_ids"] = sorted(task["data_file_ids"].items())
-    #     task["data_file_ids"] = list(map(lambda item: "-".join(item[1]), task["data_file_ids"]))
-        
-    
-    # print(tasks)    
-    
-    return tasks
+    Args:
+        datafile (Datafile): datafile from the database the has been requested
+        samples (Int): number of samples to read from the datafile (this is given by the screen width of the user)
+        selection (Float[]): proportion of the file at which start and finish to read
 
-
-def get_continuous_datafile(data_file, samples, selection):
+    Returns:
+        JSON: Raw data from the datafile.
+        List of objects with the following keys: "x", "y", "z", "timestamp"
+    """
     
-    try:
-        start_selection, end_selection = selection
-    except ValueError:
-        start_selection = end_selection = None
     
-    record_data = []
+    record_data   = []
+    datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
     
-    data_file_path = os.path.join(settings.DATAFILES_DIR, data_file.name)
     
-    # Limit file reading, we are going to send the first two hours
-    # If the user wants to see more, it will have to be requested
-    with open(data_file_path) as file:
+    with open(datafile_path) as file:
         
-        file_rows = selection_rows = sum(1 for _ in file) - 1
-        file.seek(0) # reset pointer
+        # Count how many rows are there in the CSV file:
+        file_rows = sum(1 for _ in file) - 1
+        file.seek(0)
         
-        if not start_selection is None and not end_selection is None:
-            start_selection = math.floor(start_selection * file_rows)
-            end_selection   = math.ceil(end_selection * file_rows)
-            
-            selection_rows = end_selection - start_selection
+        if not time_range:
         
-        step = max(1, math.floor(selection_rows / samples)) # prevent step from becoming 0
+            # Number of rows to skip per read row
+            step = max(1, math.floor(file_rows / samples))
+                        
+            index = 0
         
-        index = 0
-    
-        for row in csv.DictReader(file):
-            
-            if not start_selection is None and index < start_selection:
+            for row in csv.DictReader(file):
+                
+                # This row number has to be skipped:
+                if index % step != 0:
+                    index += 1
+                    continue
+                
                 index += 1
-                continue
-            
-            if not end_selection is None and index > end_selection:
-                index += 1
-                continue
-            
-            if index % step != 0:
-                index += 1
-                continue
-            
-            index += 1
-            
-            data_row = {}
-            
-            for key in row:
-                data_row[key] = RECORD_PARSE[key](row[key])
+                
+                data_row = {}
+                for key in row:
+                    data_row[key] = RECORD_PARSE[key](row[key])
 
-            record_data += [data_row]
+                record_data += [data_row]
+                
+        else:
+            start_timestamp, end_timestamp = time_range
+            
+            start_timestamp -= 1
+            end_timestamp   += 1
+            
+            start_timestamp *= 1000
+            end_timestamp   *= 1000
+            
+            for row in csv.DictReader(file):
+                
+                if int(row["timestamp"]) < start_timestamp:
+                    continue
+                
+                if int(row["timestamp"]) > end_timestamp:
+                    break
+                
+                data_row = {}
+                for key in row:
+                    data_row[key] = RECORD_PARSE[key](row[key])
+
+                record_data += [data_row]
+
         
     record_data = sorted(record_data, key=lambda item: item["timestamp"]) if len(record_data) > 0 else None
  

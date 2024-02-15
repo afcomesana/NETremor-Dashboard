@@ -237,6 +237,20 @@ def continuous(request):
 
 
 def save_tasks(incoming_tasks):
+    """
+    Save new tasks in the database.
+
+    Args:
+        incoming_tasks (Dict[]): Array with the tasks belonging to the record that has been sent.
+        Each item will have at least the following three keys:
+        - taskId
+        - taskName
+        - taskDescription
+    """
+    for task in incoming_tasks:
+        if "taskId" in task.keys():
+            task["taskId"] = task["taskId"].upper()
+    
     # Create list with each item being the arguments for creating the task that is not yet in the database
     current_stored_tasks = Task.objects.values_list("id", flat=True).distinct()
     tasks_to_store       = list(map(lambda task: {

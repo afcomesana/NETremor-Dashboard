@@ -156,3 +156,4 @@ def send_verification_email(user):
     req = requests.post("https://mailproxy.oriontech.es", json = data)
     
     print(req.text)
+    

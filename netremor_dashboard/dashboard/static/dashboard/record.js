@@ -5,52 +5,40 @@ const plotter = new Plotter();
 
 const RECORD_TYPE = document.getElementById("record-type").value;
 
+// Close the other task containers when a different task is selected:
+const taskNamesContainers   = Array.from(document.getElementsByClassName("task-name-container"));
+const taskOptionsContainers = Array.from(document.getElementsByClassName("task-options-container"));
+const trialOptions          = Array.from(document.getElementsByClassName("trial-option"));
 
-if ( RECORD_TYPE == "ambulatory" ) {
-
-    // Close the other task containers when a different task is selected:
-    const taskNamesContainers   = Array.from(document.getElementsByClassName("task-name-container"));
-    const taskOptionsContainers = Array.from(document.getElementsByClassName("task-options-container"));
-    const trialOptions          = Array.from(document.getElementsByClassName("trial-option"));
-    
-    taskNamesContainers.forEach(task => task.addEventListener("click", () => {
-        const taskToExpandId = task.getAttribute("aria-controls");
-        taskOptionsContainers.forEach(container => {
-            if ( container.id != taskToExpandId ) {
-                let collapseInstance = bootstrap.Collapse.getInstance(container);
-                collapseInstance?.hide()
-            }
-        });
-    }));
-    
-    
-    trialOptions.forEach(outerOption => {
-        outerOption.addEventListener("click", async () => {
-            if ( !outerOption.classList.contains("selected") ) {
-                trialOptions.forEach(innerOption => {
-                    innerOption.classList.remove("selected");
-                    innerOption.classList.remove("bg-success");
-                    innerOption.classList.add("bg-dark");
-                });
-                outerOption.classList.add("selected");
-                outerOption.classList.add("bg-success");
-                outerOption.classList.remove("bg-dark");
-    
-                await plotter.loadData();
-                plotter.renderChart();
-            }
-    
-        });
+taskNamesContainers.forEach(task => task.addEventListener("click", () => {
+    const taskToExpandId = task.getAttribute("aria-controls");
+    taskOptionsContainers.forEach(container => {
+        if ( container.id != taskToExpandId ) {
+            let collapseInstance = bootstrap.Collapse.getInstance(container);
+            collapseInstance?.hide()
+        }
     });
-} else if ( RECORD_TYPE == "continuous" ) {
+}));
 
-    document.addEventListener("DOMContentLoaded", async () => {
-        await plotter.loadData();
-        plotter.renderChart();
+
+trialOptions.forEach(outerOption => {
+    outerOption.addEventListener("click", async () => {
+        if ( !outerOption.classList.contains("selected") ) {
+            trialOptions.forEach(innerOption => {
+                innerOption.classList.remove("selected");
+                innerOption.classList.remove("bg-success");
+                innerOption.classList.add("bg-dark");
+            });
+            outerOption.classList.add("selected");
+            outerOption.classList.add("bg-success");
+            outerOption.classList.remove("bg-dark");
+
+            await plotter.loadData();
+            plotter.renderChart();
+        }
+
     });
-
-    // window.addEventListener("resize")
-}
+});
 
 const sensorFilters = Array.from(document.getElementsByClassName("sensor-filter"));
 const axisFilters   = Array.from(document.getElementsByClassName("axis-filter"));
@@ -94,3 +82,11 @@ axisFilters.forEach(axisButton => {
         // plotter.renderChart();
     });
 });
+
+
+if ( RECORD_TYPE == "continuous" ) {
+    (async function() {
+        await plotter.loadData();
+        plotter.renderChart();
+    })()
+}

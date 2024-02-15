@@ -37,7 +37,6 @@ export default class Plotter {
         this.selectedSensor = null;
         this.selectedPlot   = null;
         this.selectedMetric = null;
-        this.plotSelection  = [0,1];
 
 
         // -------------------------------------------------------
@@ -99,20 +98,8 @@ export default class Plotter {
             .attr("id", "record-line-group")
             .attr("pointer-events", "all")
             .attr("clip-path", "url(#clip)");
-
-        this.setupZoom();
     }
 
-    setupZoom() {
-
-        this.zoom = d3.zoom()
-            .scaleExtent([1/(this.zoomScale), 20])
-            .translateExtent([[0,0], [this.width + this.margin.left + this.margin.right, this.height + this.margin.top + this.margin.bottom]])
-            .on("zoom", this.updateChart);
-
-    
-        this.svg.call(this.zoom);
-    }
 
     getCsrfToken = () => {
         // CSRF token to make the request
@@ -136,6 +123,10 @@ export default class Plotter {
         if ( !this.trialOption && this.IS_AMBULATORY_RECORD ) {
             console.error("No option selected");
             return;
+        }
+
+        if ( this.trialOption && this.IS_CONTINUOUS_RECORD ) {
+            this.timeRange = this.trialOption.dataset.range.split("-").map(el => parseInt(el));
         }
 
 
@@ -162,7 +153,7 @@ export default class Plotter {
 
             let { trial, id: taskId } = this.trialOption.dataset;
 
-            if ([this.selectedMetric, trial].join("-") != this.selectedPlot) {
+            if ([this.selectedMetric, taskId, trial].join("-") != this.selectedPlot) {
     
                 // Update selected plot option
                 this.selectedPlot = [this.selectedMetric, trial].join("-");
@@ -180,8 +171,11 @@ export default class Plotter {
 
         } else if ( this.RECORD_TYPE == "continuous" ) {
 
-            const selectedPlot = [this.selectedMetric, this.selectedSensor, this.plotSelection.join("-")].join("-");
+            if ( !this.timeRange ) {
+                this.timeRange = false;
+            }
 
+            const selectedPlot = [this.selectedMetric, this.selectedSensor, this.timeRange].join("-");
             if ( selectedPlot != this.selectedPlot ) {
 
                 this.selectedPlot = selectedPlot;
@@ -190,29 +184,8 @@ export default class Plotter {
                     sensor: this.selectedSensor,
                     metric: this.selectedMetric,
                     samples: this.width,
-                    selection: this.plotSelection
+                    timeRange: this.timeRange
                 });
-
-                // const initialTimestamp = 1705600000000; 
-
-                // if ( !this.data ) {
-                //     this.data = data;
-                // } else {
-                    
-                //     const timestamps = this.data.map(item => item.timestamp);
-                //     this.data = [
-                //         ...this.data,
-                //         ...data.filter(item => !timestamps.includes(item.timestamp))
-                //     ];
-
-                //     this.data.sort((a, b) => {
-                //         if ( a.timestamp < b.timestamp ) return -1;
-                //         if ( a.timestamp >= b.timestamp ) return 1;
-                //     });
-                    
-                // }
-                // console.log(this.data[0].timestamp - initialTimestamp, this.data.slice(-1)[0].timestamp - initialTimestamp)
-                // console.log(this.data)
             }
 
             this.sensorData = this.data;
@@ -416,37 +389,6 @@ export default class Plotter {
                 .y(d => this.yScale(d[axis]))
             )
     }
-
-
-    updateChart = event => {
-        clearTimeout(this.updateChartTimeout);
-
-        this.updateChartTimeout = setTimeout(async () => {
-
-            const { left: lineGroupLeft, width: lineGroupWidth } = this.lineGroup.node().getBoundingClientRect();
-
-            const { left: recordChartContainerLeft, right: recordChartContainerRight } = this.recordChartContainer.getBoundingClientRect();
-            
-            this.plotSelection = [
-                Math.max(0, (recordChartContainerLeft - lineGroupLeft)/lineGroupWidth),
-                Math.min(1, (recordChartContainerRight - lineGroupLeft)/lineGroupWidth),
-            ]
-
-            await this.loadData();
-            this.renderChart();
-            // Array.from(this.lineGroup.node().getElementsByClassName(".line"))
-            //     .forEach(line => {
-            //         const axis = line.id.split("-")[1];
-            //         line.d = this.sensorData.map(item => [this.xScale(item.timestamp), this.yScale(item[axis])]);
-            //     });
-        }, 500);
-
-
-        this.lineGroup.selectAll(".line")
-            .attr("style", `transform: translate(${event.transform.x}px, 0) scaleX(${event.transform.k})`);
-        this.xAxisElement.call(this.xAxis.scale(event.transform.rescaleX(this.xScale)));
-    }
-
     
     // --------------
     // HANDLE SPINNER
