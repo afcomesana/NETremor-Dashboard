@@ -1,4 +1,5 @@
 import re
+import time
 import random
 import string
 import unicodedata
@@ -31,3 +32,21 @@ def normalize_text(text):
 def get_random_string(length):
     characters = string.ascii_letters + string.digits
     return ''.join(random.choice(characters) for _ in range(length))
+
+def measure_time(func, *args):
+    """Measure elapsed time for the function to execute
+
+    Args:
+        func (function): function whose execution time we want to measure
+    """
+
+    def wrapper(*args):
+        start_time = time.time()
+        
+        func(*args)
+        
+        end_time = time.time()
+        
+        print("Ellapsed seconds for %s: %s" % (func.__name__, end_time - start_time))
+        
+    return wrapper

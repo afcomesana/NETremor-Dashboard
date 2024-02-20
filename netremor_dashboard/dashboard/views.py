@@ -292,7 +292,7 @@ def record(request, record_id):
             datafile       = record.datafile_set.get(sensor=sensor)
             response_data  = get_continuous_datafile(datafile, samples, time_range)
             
-        elif record.type == "ambulatory":            
+        elif record.type == "ambulatory":
             params = json.loads(request.body)
             
             if params["metric"] == "raw":
@@ -342,7 +342,7 @@ def record(request, record_id):
         ]
         
     response["tasks"] = get_record_tasks(record, columns, callback)
-    
+        
     return render(
         request,
         "dashboard/record.html",

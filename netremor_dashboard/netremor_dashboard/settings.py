@@ -19,7 +19,6 @@ DATAFILES_DIR = Path.joinpath(BASE_DIR, "data-files")
 SENSOR_CHOICES = [
     ("accelerometer", "Accelerometer"),
     ("gyroscope", "Gyroscope"),
-    # ("heartRate", "Pulsómetro"),
 ]
 
 
