@@ -31,6 +31,7 @@ def ambulatory(request):
     if request.method != "POST":
         return HttpResponseBadRequest("Método no válido.")
     
+    print("Check 1")
     # Validate API_KEY
     try:
         if request.META["HTTP_NETREMOR_API_KEY"] != API_KEY:
@@ -40,6 +41,7 @@ def ambulatory(request):
     
     if len(request.FILES) == 0:
         return HttpResponseBadRequest("No hay archivos de datos.")
+    print("Check 2")
     
     # Split tasks and subject data:
     try:
@@ -54,19 +56,25 @@ def ambulatory(request):
     except KeyError:
         return HttpResponseBadRequest("Falta el campo 'recordedTasks' en la solicitud.")
     
+    print("Check 3")
+    
     try:
         record_added_on = post_fields.pop("recordAddedOn")[0]
         
     except KeyError:
         return HttpResponseBadRequest("Falta el campo 'recordAddedOn' en la solicitud.")
     
+    print("Check 4")
     save_tasks(recorded_tasks)
+    print("Check 5")
     
     # Save/update subject in database:
     try:
         subject = save_subject(post_fields)
     except KeyError as error_message:
+        print("Key error:", error_message)
         return HttpResponseBadRequest(error_message)
+    print("Check 6")
     
     # Create record:
     try:
@@ -75,6 +83,7 @@ def ambulatory(request):
     except Exception as e:
         print("Unknown error: ", e)
         return HttpResponseServerError
+    print("Check 7")
 
     # Save data files and corresponding tasks:
     for index, task in enumerate(recorded_tasks):
@@ -113,7 +122,8 @@ def ambulatory(request):
             except KeyError:
                 print("Current task doesn't have %s file" % sensor)
                 continue
-
+        
+    print("check 8")
     if record.datafile_set.count() == 0:
         record.delete()
         return HttpResponseBadRequest("This record is already saved.")
