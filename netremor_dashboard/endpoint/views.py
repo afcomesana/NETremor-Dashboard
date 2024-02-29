@@ -134,6 +134,9 @@ def ambulatory(request):
 
 @csrf_exempt
 def continuous(request):
+    print(request.FILES)
+    
+    return HttpResponse("OK")
     
     # Only allow request with POST method:
     if request.method != "POST":

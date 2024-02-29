@@ -9,6 +9,7 @@ const RECORD_TYPE = document.getElementById("record-type").value;
 const taskNamesContainers   = Array.from(document.getElementsByClassName("task-name-container"));
 const taskOptionsContainers = Array.from(document.getElementsByClassName("task-options-container"));
 const trialOptions          = Array.from(document.getElementsByClassName("trial-option"));
+const metricOptions         = Array.from(document.getElementsByClassName("metric-option"));
 
 taskNamesContainers.forEach(task => task.addEventListener("click", () => {
     const taskToExpandId = task.getAttribute("aria-controls");
@@ -48,6 +49,24 @@ sensorFilters.forEach(outerOption => {
     outerOption.addEventListener("click", async () => {
         if ( !outerOption.classList.contains("selected") ) {
             sensorFilters.forEach(innerOption => {
+                innerOption.classList.remove("selected");
+                innerOption.classList.remove("btn-primary");
+            });
+            
+            outerOption.classList.add("selected");
+            outerOption.classList.add("btn-primary");
+
+            await plotter.loadData();
+            plotter.renderChart();
+        }
+
+    });
+});
+
+metricOptions.forEach(outerOption => {
+    outerOption.addEventListener("click", async () => {
+        if ( !outerOption.classList.contains("selected") ) {
+            metricOptions.forEach(innerOption => {
                 innerOption.classList.remove("selected");
                 innerOption.classList.remove("btn-primary");
             });

@@ -239,12 +239,25 @@ export default class Plotter {
         // If there is something to plot, initialize the chart.
         this.initChart();
 
-        // this.setupZoom();
+        switch(this.selectedMetric) {
+
+            case("spectrogram"):
+                console.log("plotting spectrogram")
+                this.plotSpectrogram();
+                break;
+
+            default:
+                console.log("plotting raw data")
+                this.plotRawData();
+                break;
+        }
+
+    }
+
+    plotRawData = () => {
 
         // Show colors of the lines
         this.updateLegend();
-        
-        console.log(`x axis extent: ${d3.extent(this.sensorData, item => new Date(item.timestamp))}`)
 
         // X-Axis
         this.xScale = d3.scaleTime()
@@ -288,6 +301,44 @@ export default class Plotter {
         this.axis.forEach(axis => {
             this.drawLine(this.selectedSensor, axis, this.sensorData);
         });
+    }
+
+    plotSpectrogram = () => {
+        // X-Axis
+        this.xScale = d3.scaleTime()
+        .domain(d3.extent(this.sensorData, item => new Date(item.timestamp)))
+        .range([0, this.width]);
+
+       this.xAxis = d3.axisBottom(this.xScale).tickFormat(d3.timeFormat("%H:%M:%S"))
+
+       document.getElementById(this.xAxisElementId)?.remove()
+       this.xAxisElement  = this.chartGroupContainer.append("g")
+           .attr("id", this.xAxisElementId)
+           .attr("transform", `translate(0, ${this.height})`)
+           .call(this.xAxis);
+       
+       
+       this.xAxisElementWidth   = this.xAxisElement.node().getBoundingClientRect().width;
+       this.xAxisElementOffsetX = this.xAxisElement.node().getBoundingClientRect().x;
+
+       // Y-Axis
+       this.yScale = d3.scaleLinear()
+           .domain(this.getDataDomain())
+           .range([this.height, 0]);
+
+       this.yAxis = d3.axisLeft(this.yScale);
+
+       document.getElementById(this.yAxisElementId)?.remove();
+       this.yAxisElement = this.chartGroupContainer.append("g")
+           .attr("id", this.yAxisElementId)
+           .call(this.yAxis);
+
+       
+       document.getElementById(this.yAxisElementTitleId)?.remove();
+       this.chartGroupContainer.append("text")
+           .attr("id", this.yAxisElementTitleId)
+           .attr("transform", `translate(-30, ${Math.floor(this.height/2)}) rotate(-90) `)
+           .html(axisTitles[this.selectedSensor]);
     }
 
 

@@ -20,6 +20,8 @@ import itertools
 import zipfile
 from pytz import timezone
 import time
+import numpy as np
+from scipy import signal
 
 RECORD_PARSE = {
     "x": float,
@@ -307,7 +309,7 @@ def record(request, record_id):
                     return HttpResponseBadRequest("CSV file ill-formed.")
                 
             elif params["metric"] == "spectrogram":
-                response_data = []
+                response_data = get_ambulatory_record_trial_spectrogram(record, params["taskId"], params["trial"])
                 
             elif params["metric"] == "energy":
                 response_data = []
@@ -319,7 +321,6 @@ def record(request, record_id):
         else:
             return HttpResponseServerError()
             
-        
         return HttpResponse(json.dumps(response_data))
 
 
@@ -470,6 +471,43 @@ def get_ambulatory_record_trial_data(record, task_id, trial):
     record_data = sorted(record_data, key=lambda item: item["timestamp"]) if len(record_data) > 0 else None
  
     return record_data
+
+def get_ambulatory_record_trial_spectrogram(record, task_id, trial, axis = "x"):
+    
+    LOW_PASS_FREQ  = 2
+    HIGH_PASS_FREQ = 8
+    SAMPLE_FREQ    = 30
+    HOP_SECONDS    = 1 # how many seconds slide the window
+    HOP_SIZE       = HOP_SECONDS*int(1000/SAMPLE_FREQ) # samples per second
+    WINDOW_SECONDS = 5
+    WINDOW_SIZE    = WINDOW_SECONDS*int(1000/SAMPLE_FREQ)
+    
+    raw_data = get_ambulatory_record_trial_data(record, task_id, trial)
+
+    
+    raw_data_acc  = np.array(list(map(lambda item: item[axis], filter(lambda item: item["sensor"] == "accelerometer", raw_data))))
+    raw_data_gyro = np.array(list(map(lambda item: item[axis], filter(lambda item: item["sensor"] == "gyroscope", raw_data))))
+    
+    # Numerator and denominator of the polynomials of the IIR filter
+    b, a = signal.butter(N=4, Wn=[LOW_PASS_FREQ, HIGH_PASS_FREQ], btype="bandpass", fs=30)
+
+    # filtfilt the input acceleracion_(x|y|z) filtered
+    raw_data_acc  = signal.filtfilt(b, a, signal.filtfilt(b, a, raw_data_acc))
+    raw_data_gyro = signal.filtfilt(b, a, signal.filtfilt(b, a, raw_data_gyro))
+
+    unitary_window = np.ones(WINDOW_SIZE)
+    
+    # gaussian_window = signal.windows.gaussian(WINDOW_SIZE, std=1)
+    
+    SFT = signal.ShortTimeFFT(unitary_window, hop=HOP_SIZE, fs=SAMPLE_FREQ)
+    Sx_acc  = abs(SFT.stft(raw_data_acc)).tolist()
+    Sx_gyro = abs(SFT.stft(raw_data_gyro)).tolist()
+    
+    Sx_acc  = list(map(lambda item: {"psd": item, "sensor": "accelerometer"}, Sx_acc) )
+    Sx_gyro = list(map(lambda item: {"psd": item, "sensor": "gyroscope"}, Sx_gyro))
+    
+    return Sx_acc + Sx_gyro
+    
 
 def get_task_name_data_metric(record_id, task_name, metric):
     
