@@ -349,3 +349,63 @@ def compute_spectrogram(entity):
         
         with open(datafile_path) as file:
             
+            ######################################################################
+            # SPECTROGRAM COMPUTATION
+            ######################################################################
+            
+            # def band_pass_filter(data, low_pass_frequency, high_pass_frequency, sampling_frequency):
+            # # N: order of the filter
+            # # Wn: critical frequency
+            # b, a = signal.butter(N=4, Wn=[low_pass_frequency, high_pass_frequency], btype="bandpass", fs=sampling_frequency)
+            # # returns numerator and denominator of the polynomials of the IIR filter
+
+            # # filtfilt the input acceleracion_(x|y|z) filtered
+            # return signal.filtfilt(b, a, signal.filtfilt(b, a, data))
+            
+            # DATA_DIR = "ambulatory-data/b261383e019eba47c32416a232c3181c94da4dab457878b20cd0f10797203c10-ambulatory-38"
+
+            # # Select a file corresponding to the task of brushing teeth;
+            # TEST_FILE = next(filter(lambda filename: re.search(r"[0-9]+\.csv$", filename) is not None, os.listdir(DATA_DIR)))
+
+            # with open(os.path.join(DATA_DIR, TEST_FILE)) as file:
+            #     next(file)
+            #     data = list(map(lambda line: float(line.split(",")[0]), file))
+                        
+            # # Bandpass filter to remove voluntary motion and noise:
+
+            # from utils import bandpass_filter
+
+            # filtered_data = bandpass_filter(data, 2, 8, 30)
+
+            # t = np.arange(len(data))
+
+            # plt.plot(t, data)
+            # plt.plot(t, filtered_data)
+            
+            
+            # # Compute spectrogram:
+            # SAMPLE_FREQ    = 30 # Herz
+            # SAMPLE_PERIOD  = 1 / SAMPLE_FREQ # seconds
+            # HOP_SECONDS    = 1 # seconds
+            # HOP_SAMPLES    = HOP_SECONDS*SAMPLE_FREQ
+            # WINDOW_SECONDS = 2
+            # WINDOW_SIZE    = WINDOW_SECONDS*SAMPLE_FREQ
+            # OVERSAMPLING_FACTOR = 16
+
+            # fig, ax1 = plt.subplots()
+
+            # gaussian_window = signal.windows.gaussian(WINDOW_SIZE, std=12, sym=True)
+
+            # SFT = signal.ShortTimeFFT(gaussian_window, hop=HOP_SAMPLES, fs=SAMPLE_FREQ, mfft=OVERSAMPLING_FACTOR*SAMPLE_FREQ, scale_to="psd")
+            # psd = SFT.spectrogram(filtered_data)
+
+            # t_lo, t_hi = SFT.extent(len(data))[:2] # time range of the spectrogram
+            # print(SFT.p_num(len(data))) # number of time slices
+            # print(SFT.delta_t) # in seconds
+            # print(SFT.delta_f) # in Hz
+
+            # ax1.set(xlim=(t_lo, t_hi))
+
+
+            # psd_db = 10 * np.log10(np.fmax(psd, 1e-4))
+            # im1 = ax1.imshow(psd_db, origin="lower", aspect="auto", extent=SFT.extent(len(data)), cmap="magma")
