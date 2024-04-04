@@ -29,8 +29,8 @@ SENSOR_CHOICES = [
 SECRET_KEY = 'django-insecure-i8um7+i47%m67y_gp(kvu6_#unxp*pt&9i&cg#4zjrb8l@*eo3'
 
 # REDIRECT TRAFFI FROM HTTP TO HTTPS:
-# SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-# SECURE_SSL_REDIRECT = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = True
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True

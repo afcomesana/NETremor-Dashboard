@@ -163,8 +163,6 @@ export default class Plotter {
                     trial,
                     taskId
                 });
-
-                console.log(this.data)
             }
 
             this.sensorData = this.data.filter(sample => sample.sensor == this.selectedSensor);
@@ -191,7 +189,6 @@ export default class Plotter {
             this.sensorData = this.data;
         }
 
-        console.log(this.sensorData)
     }
 
 
@@ -278,7 +275,7 @@ export default class Plotter {
 
         // Y-Axis
         this.yScale = d3.scaleLinear()
-            .domain(this.getDataDomain())
+            .domain(this.getRawDataDomain())
             .range([this.height, 0]);
 
         this.yAxis = d3.axisLeft(this.yScale);
@@ -305,11 +302,12 @@ export default class Plotter {
 
     plotSpectrogram = () => {
         // X-Axis
-        this.xScale = d3.scaleTime()
-        .domain(d3.extent(this.sensorData, item => new Date(item.timestamp)))
-        .range([0, this.width]);
+        this.xScale = d3.scaleBand()
+            .domain([...Array(this.sensorData.length).keys()])
+            .range([0, this.width]);
 
-       this.xAxis = d3.axisBottom(this.xScale).tickFormat(d3.timeFormat("%H:%M:%S"))
+       this.xAxis = d3.axisBottom(this.xScale);
+
 
        document.getElementById(this.xAxisElementId)?.remove()
        this.xAxisElement  = this.chartGroupContainer.append("g")
@@ -322,8 +320,8 @@ export default class Plotter {
        this.xAxisElementOffsetX = this.xAxisElement.node().getBoundingClientRect().x;
 
        // Y-Axis
-       this.yScale = d3.scaleLinear()
-           .domain(this.getDataDomain())
+       this.yScale = d3.scaleBand()
+           .domain([...Array(this.sensorData[0].psd.length).keys()])
            .range([this.height, 0]);
 
        this.yAxis = d3.axisLeft(this.yScale);
@@ -333,12 +331,29 @@ export default class Plotter {
            .attr("id", this.yAxisElementId)
            .call(this.yAxis);
 
-       
+        var myColor = d3.scaleSequential()
+           .interpolator(d3.interpolateInferno)
+           .domain(this.getSpectrogramDataDomain())       
+
        document.getElementById(this.yAxisElementTitleId)?.remove();
        this.chartGroupContainer.append("text")
            .attr("id", this.yAxisElementTitleId)
            .attr("transform", `translate(-30, ${Math.floor(this.height/2)}) rotate(-90) `)
            .html(axisTitles[this.selectedSensor]);
+
+        this.lineGroup.html("");
+
+        this.sensorData.forEach(({psd}, xIndex) => {
+            psd.forEach((freq, yIndex) => {
+                this.lineGroup.append("rect")
+                    .attr("x", this.xScale(xIndex))
+                    .attr("y", this.yScale(yIndex))
+                    .attr("width", this.xScale.bandwidth())
+                    .attr("height", this.yScale.bandwidth())
+                    .style("fill", myColor(freq))
+            });
+        });
+
     }
 
 
@@ -372,7 +387,6 @@ export default class Plotter {
                 axisElement.style.color = "black";
             }
         });
-
     }
 
     /**
@@ -381,8 +395,17 @@ export default class Plotter {
      * @returns {Array} being the first element the minimum value along all the axis and the
      * second element the maximum value along all the axis
      */
-    getDataDomain = () => {
+    getRawDataDomain = () => {
         let domain = this.axis.map(axis => d3.extent(this.sensorData, d => d[axis]))
+
+        return [
+            Math.min(...domain.map(axisDomain => axisDomain[0])), // minimum of all axis
+            Math.max(...domain.map(axisDomain => axisDomain[1])), // maximum of all axis
+        ]
+    }
+
+    getSpectrogramDataDomain = () => {
+        let domain = this.sensorData.map(item => d3.extent(item.psd))
 
         return [
             Math.min(...domain.map(axisDomain => axisDomain[0])), // minimum of all axis

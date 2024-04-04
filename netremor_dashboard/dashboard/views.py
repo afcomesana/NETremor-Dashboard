@@ -1,7 +1,7 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.http import HttpResponse, Http404, HttpResponseBadRequest, HttpResponseServerError
 from django.template import loader
-from endpoint.models import Subject, Record, Datafile, Task
+from endpoint.models import Subject, Record, Datafile, Task, Datafile_task_rel
 from django.conf import settings
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
@@ -252,9 +252,22 @@ def record(request, record_id):
         zip_file_path = os.path.join(settings.DATAFILES_DIR, zip_filename)
         
         with zipfile.ZipFile(zip_file_path, "w") as temp_zip:
-            for data_file in Datafile.objects.filter(record_id=record_id):
-                data_file_path = os.path.join(settings.DATAFILES_DIR, data_file.name)
-                temp_zip.write(data_file_path, data_file.name)
+            for datafile in Datafile.objects.filter(record_id=record_id):
+                filename = datafile.name
+                try:
+                    datafile_task_rel = Datafile_task_rel.objects.get(datafile=datafile)
+                    task_id = datafile_task_rel.task.id.lower()
+                    filename, extension = filename.split(".")
+                    if len(list(filter(lambda item: item.lower() == task_id, filename.split("-")))) == 0:
+                        filename += "-%s" % task_id
+                        
+                    filename = ".".join([filename, extension])
+                    
+                except Datafile_task_rel.DoesNotExist:
+                    pass
+                
+                data_file_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
+                temp_zip.write(data_file_path, filename)
              
                 
             # For continuous records, add a CSV with the information regarding
@@ -287,7 +300,6 @@ def record(request, record_id):
         # 3.b)
         if record.type == "continuous":
             
-            print(request.body)
             sensor, metric, samples, time_range = json.loads(request.body).values()
             
             # Since files in the continuous case are much bigger, we only read one of the sensors:
@@ -474,36 +486,38 @@ def get_ambulatory_record_trial_data(record, task_id, trial):
 
 def get_ambulatory_record_trial_spectrogram(record, task_id, trial, axis = "x"):
     
-    LOW_PASS_FREQ  = 2
-    HIGH_PASS_FREQ = 8
-    SAMPLE_FREQ    = 30
-    HOP_SECONDS    = 1 # how many seconds slide the window
-    HOP_SIZE       = HOP_SECONDS*int(1000/SAMPLE_FREQ) # samples per second
-    WINDOW_SECONDS = 5
-    WINDOW_SIZE    = WINDOW_SECONDS*int(1000/SAMPLE_FREQ)
+    LOW_PASS_FREQ  = 2 # Herz
+    HIGH_PASS_FREQ = 8 # Herz
+    SAMPLE_FREQ    = 30 # Herz
+    SAMPLE_PERIOD  = 1 / SAMPLE_FREQ # seconds
+    HOP_SECONDS    = 1 # seconds
+    HOP_SAMPLES    = HOP_SECONDS*SAMPLE_FREQ
+    WINDOW_SECONDS = 2
+    WINDOW_SIZE    = WINDOW_SECONDS*SAMPLE_FREQ
+    
+    OVERSAMPLING_FACTOR = 16
+    GAUSSIAN_WINDOW = signal.windows.gaussian(WINDOW_SIZE, std=12, sym=True)
     
     raw_data = get_ambulatory_record_trial_data(record, task_id, trial)
 
-    
     raw_data_acc  = np.array(list(map(lambda item: item[axis], filter(lambda item: item["sensor"] == "accelerometer", raw_data))))
     raw_data_gyro = np.array(list(map(lambda item: item[axis], filter(lambda item: item["sensor"] == "gyroscope", raw_data))))
     
     # Numerator and denominator of the polynomials of the IIR filter
-    b, a = signal.butter(N=4, Wn=[LOW_PASS_FREQ, HIGH_PASS_FREQ], btype="bandpass", fs=30)
+    b, a = signal.butter(N=4, Wn=[LOW_PASS_FREQ, HIGH_PASS_FREQ], btype="bandpass", fs=SAMPLE_FREQ)
 
     # filtfilt the input acceleracion_(x|y|z) filtered
     raw_data_acc  = signal.filtfilt(b, a, signal.filtfilt(b, a, raw_data_acc))
     raw_data_gyro = signal.filtfilt(b, a, signal.filtfilt(b, a, raw_data_gyro))
 
-    unitary_window = np.ones(WINDOW_SIZE)
     
-    # gaussian_window = signal.windows.gaussian(WINDOW_SIZE, std=1)
+    SFT = signal.ShortTimeFFT(GAUSSIAN_WINDOW, hop=HOP_SAMPLES, fs=SAMPLE_FREQ, mfft=OVERSAMPLING_FACTOR*SAMPLE_FREQ, scale_to="psd")
     
-    SFT = signal.ShortTimeFFT(unitary_window, hop=HOP_SIZE, fs=SAMPLE_FREQ)
-    Sx_acc  = abs(SFT.stft(raw_data_acc)).tolist()
-    Sx_gyro = abs(SFT.stft(raw_data_gyro)).tolist()
+    Sx_acc  = SFT.spectrogram(raw_data_acc).tolist()
+    Sx_gyro = SFT.spectrogram(raw_data_gyro).tolist()
     
-    Sx_acc  = list(map(lambda item: {"psd": item, "sensor": "accelerometer"}, Sx_acc) )
+    
+    Sx_acc  = list(map(lambda item: {"psd": item, "sensor": "accelerometer"}, Sx_acc))
     Sx_gyro = list(map(lambda item: {"psd": item, "sensor": "gyroscope"}, Sx_gyro))
     
     return Sx_acc + Sx_gyro

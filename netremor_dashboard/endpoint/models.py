@@ -59,9 +59,13 @@ class Datafile(models.Model):
     def __str__(self):
         return self.name
     
-    record           = models.ForeignKey("Record", models.CASCADE)
-    name             = models.CharField(max_length=255)
-    sensor           = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True)
+    record = models.ForeignKey("Record", models.CASCADE)
+    name   = models.CharField(max_length=255)
+    sensor = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True) 
+    
+class Spectrogram(models.Model):
+    datafile = models.ForeignKey("Datafile", models.CASCADE)
+    name = models.CharField(max_length=255)
     
 class Task(models.Model):
     def __str__(self):
@@ -86,20 +90,6 @@ class Datafile_task_rel(models.Model):
     trial     = models.IntegerField(null=True)
     starts_at = models.DateTimeField(null=True)
     ends_at   = models.DateTimeField(null=True)
-    
-    
-class Bradykinesia_metrics(models.Model):
-    """
-    Table for storing the reference values to compute the probability of a patient
-    of presenting bradykinesia symptoms.
-    """
-    
-    task      = models.ForeignKey("Record", models.CASCADE)
-    mean_time = models.FloatField()
-    max_time  = models.FloatField()
-    frequency = models.FloatField()
-    power     = models.FloatField()
-
 
 @receiver(post_delete, sender=Datafile)
 def signal_data_file_deleted(sender, instance, using, **kwargs):

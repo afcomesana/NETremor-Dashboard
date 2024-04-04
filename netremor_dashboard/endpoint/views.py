@@ -14,11 +14,14 @@ from .utils import save_subject
 import os
 import re
 import json
+import time
+import uuid
 from csvsort import csvsort
 from datetime import datetime
 from pytz import timezone
 from dotenv import load_dotenv
-import utils
+import threading
+
 
 load_dotenv()
 API_KEY      = os.getenv("API_KEY")
@@ -31,73 +34,76 @@ def ambulatory(request):
     if request.method != "POST":
         return HttpResponseBadRequest("Método no válido.")
     
-    print("Check 1")
     # Validate API_KEY
     try:
         if request.META["HTTP_NETREMOR_API_KEY"] != API_KEY:
             return HttpResponseForbidden("Clave de API incorrecta.")
+        
+    # No API KEY header
     except KeyError:
         return HttpResponseForbidden("No se ha enviado clave de API.")
     
+    # No files sent with the request
     if len(request.FILES) == 0:
-        return HttpResponseBadRequest("No hay archivos de datos.")
-    print("Check 2")
+        return HttpResponseBadRequest("No se han enviado archivos.")
+    
+    # Get subject and record data:
+    body_filepath = os.path.join(settings.DATAFILES_DIR, "%s.json" % uuid.uuid1().hex)
+    default_storage.save(body_filepath, request.FILES["body.json"])
+    
+    with open(body_filepath, "r") as file:
+        body_data = json.load(file)
+    
+    os.remove(body_filepath)
     
     # Split tasks and subject data:
     try:
-        post_fields = request.POST.copy()
-        
-        recorded_tasks = post_fields.pop("recordedTasks")[0]
-        recorded_tasks = json.loads(recorded_tasks)
-        
+        recorded_tasks = body_data.pop("recorded_tasks")
         if len(recorded_tasks) == 0:
             return HttpResponseBadRequest("No hay tareas asociadas.")
         
     except KeyError:
         return HttpResponseBadRequest("Falta el campo 'recordedTasks' en la solicitud.")
-    
-    print("Check 3")
+
     
     try:
-        record_added_on = post_fields.pop("recordAddedOn")[0]
-        
+        record_added_on = body_data.pop("record_added_on")
+        record_added_on = datetime.fromtimestamp(record_added_on/1000).astimezone(timezone(settings.TIME_ZONE))
     except KeyError:
-        return HttpResponseBadRequest("Falta el campo 'recordAddedOn' en la solicitud.")
+        return HttpResponseBadRequest("Falta el campo 'record_added_on' en la solicitud.")
     
-    print("Check 4")
+    # Record ID in this database model is generated automatically
+    del body_data["record_id"]
+    
+    # Standarize tasks IDs and names to avoid repetitions and inconsistencies when talking about the same task:
     save_tasks(recorded_tasks)
-    print("Check 5")
     
     # Save/update subject in database:
     try:
-        subject = save_subject(post_fields)
+        subject = save_subject(body_data)
+        
+    # Some of the mandatory fields is not present in the request:
     except KeyError as error_message:
         print("Key error:", error_message)
         return HttpResponseBadRequest(error_message)
-    print("Check 6")
+    
     
     # Create record:
     try:
-        record = Record(subject = subject, type="ambulatory")
+        record = Record(subject = subject, type="ambulatory", added_on=record_added_on)
         record.save()
     except Exception as e:
         print("Unknown error: ", e)
         return HttpResponseServerError
-    print("Check 7")
+    
 
     # Save data files and corresponding tasks:
-    for index, task in enumerate(recorded_tasks):
+    for task in recorded_tasks:
         for sensor in SENSOR_NAMES:
             try:
                 # Store the file in the data files directory:
-                file      = request.FILES[task["%sFilename" % sensor]]
-                filename  = [utils.str2filename(subject.id), record_added_on, sensor, str(index)]
-                
-                if "taskId" in task.keys():
-                    filename += [utils.str2filename(task["taskId"])]
-                    
-                filename  = "-".join(filename)
-                filename += ".csv"
+                file      = request.FILES[task["%s_filename" % sensor]]
+                filename  = file.name
                 filepath  = os.path.join(settings.DATAFILES_DIR, filename)
                 
                 if os.path.exists(filepath):
@@ -106,15 +112,18 @@ def ambulatory(request):
                 
                 default_storage.save(filepath, file)
                 
+                # Sort the data based on timestamp (4th column, columns 0 indexed)
+                csvsort(filepath, [3])
+                
                 # Store data file instance in database:
                 datafile = Datafile(record=record, name=filename, sensor=sensor)
                 datafile.save()
                 
-                if "taskId" in task.keys():
+                if "task_id" in task.keys():
                     Datafile_task_rel(
                         record=record,
                         datafile=datafile,
-                        task=Task.objects.get(id=task["taskId"]),
+                        task=Task.objects.get(id=task["task_id"]),
                         trial=task["trial"]
                     ).save()
                     
@@ -123,20 +132,18 @@ def ambulatory(request):
                 print("Current task doesn't have %s file" % sensor)
                 continue
         
-    print("check 8")
     if record.datafile_set.count() == 0:
         record.delete()
         return HttpResponseBadRequest("This record is already saved.")
-        
-        
-    return HttpResponse("OK")
+    
+    # Trigger computation of spectrograms upon received data without
+    # blocking the response sending
+    threading.Thread(target = compute_spectrogram, args = [record]).start()
 
+    return HttpResponse("OK")
 
 @csrf_exempt
 def continuous(request):
-    print(request.FILES)
-    
-    return HttpResponse("OK")
     
     # Only allow request with POST method:
     if request.method != "POST":
@@ -152,24 +159,41 @@ def continuous(request):
     except KeyError:
         return HttpResponseForbidden("Missing api key.")
     
-    post_fields = request.POST.copy()
+    
+    
+    # Get subject and record data:
+    body_filepath = os.path.join(settings.DATAFILES_DIR, "%s.json" % uuid.uuid1().hex)
+    default_storage.save(body_filepath, request.FILES["body.json"])
+    
+    with open(body_filepath, "r") as file:
+        body_data = json.load(file)
+    
+    
+    os.remove(body_filepath)
     
     try:
         # Save recorded tasks during continuous record:
-        recorded_tasks = post_fields.pop("recordedTasks")[0]
-        recorded_tasks = json.loads(recorded_tasks)
+        recorded_tasks = body_data.pop("recorded_tasks")
         save_tasks(recorded_tasks)
     except KeyError:
         recorded_tasks = []
+        
+            
+    try:
+        record_added_on = body_data.pop("record_added_on")
+        record_added_on = datetime.fromtimestamp(record_added_on/1000).astimezone(timezone(settings.TIME_ZONE))
+    except KeyError:
+        return HttpResponseBadRequest("Falta el campo 'record_added_on' en la solicitud.")
+    
     
     # Save/update subject in database:
     try:
-        subject = save_subject(post_fields)
+        subject = save_subject(body_data)
     except KeyError as error_message:
         return HttpResponseBadRequest("Key error in request: %s" % error_message)
     
     # Create or retrieves record:
-    record, _ = subject.record_set.get_or_create(type="continuous")
+    record, _ = subject.record_set.get_or_create(type="continuous", defaults={"added_on": record_added_on})
     
     try:
             
@@ -178,15 +202,14 @@ def continuous(request):
             # Do not save files whose sensor could not be identified:
             sensor = next(filter(lambda sensor_name: sensor_name in file, SENSOR_NAMES), None)
             if sensor is None:
-                print("Skipping not recognized sensor file.")
+                print("Skipping not recognized sensor file: %s." % file)
                 continue
             
             # Get or create database instance:
             try:
                 datafile = record.datafile_set.get(sensor = sensor)
             except Datafile.DoesNotExist:
-                filename = "%s-%s" % (subject.id, file)
-                filename = re.sub(r'\.dat$', ".csv", filename)
+                filename = re.sub(r'\.dat$', ".csv", file)
                 
                 # Store data file instance in database:
                 datafile_args = {
@@ -204,9 +227,9 @@ def continuous(request):
                     Datafile_task_rel(
                         record=record,
                         datafile=datafile,
-                        task=Task.objects.get(id=task["taskId"]),
-                        starts_at=datetime.fromtimestamp(task["startsAt"]/1000).astimezone(timezone(settings.TIME_ZONE)).isoformat(sep=" ", timespec="milliseconds"),
-                        ends_at=datetime.fromtimestamp(task["endsAt"]/1000).astimezone(timezone(settings.TIME_ZONE)).isoformat(sep=" ", timespec="milliseconds"),
+                        task=Task.objects.get(id=task["task_id"]),
+                        starts_at=datetime.fromtimestamp(task["starts_at"]/1000).astimezone(timezone(settings.TIME_ZONE)).isoformat(sep=" ", timespec="milliseconds"),
+                        ends_at=datetime.fromtimestamp(task["ends_at"]/1000).astimezone(timezone(settings.TIME_ZONE)).isoformat(sep=" ", timespec="milliseconds"),
                     ).save()
 
             filepath = os.path.join(settings.DATAFILES_DIR, datafile.name)
@@ -256,21 +279,21 @@ def save_tasks(incoming_tasks):
     Args:
         incoming_tasks (Dict[]): Array with the tasks belonging to the record that has been sent.
         Each item will have at least the following three keys:
-        - taskId
-        - taskName
-        - taskDescription
+        - task_id
+        - task_name
+        - task_description
     """
     for task in incoming_tasks:
-        if "taskId" in task.keys():
-            task["taskId"] = task["taskId"].upper()
+        if "task_id" in task.keys():
+            task["task_id"] = task["task_id"].upper()
     
     # Create list with each item being the arguments for creating the task that is not yet in the database
     current_stored_tasks = Task.objects.values_list("id", flat=True).distinct()
     tasks_to_store       = list(map(lambda task: {
-        "id": task["taskId"],
-        "name": task["taskName"] if "taskName" in task.keys() else None,
-        "description": task["taskDescription"] if "taskDescription" in task.keys() else None,
-    }, filter(lambda incoming_task: "taskId" in incoming_task.keys() and incoming_task["taskId"] not in current_stored_tasks, incoming_tasks)))
+        "id": task["task_id"],
+        "name": task["task_name"] if "task_name" in task.keys() else None,
+        "description": task["task_description"] if "task_description" in task.keys() else None,
+    }, filter(lambda incoming_task: "task_id" in incoming_task.keys() and incoming_task["task_id"] not in current_stored_tasks, incoming_tasks)))
     
     # Storing those tasks that do not exist in the database:
     for task in tasks_to_store:
@@ -300,3 +323,29 @@ def index(request):
 def records(request, subject_id):
     subject = get_object_or_404(Subject, pk=subject_id)
     return render(request, "dashboard/records.html", {"subject": subject})
+
+def compute_spectrogram(entity):
+    """
+    Given an entity (record|datafile), compute the spectrograms of the raw sensor data.
+    
+    If the entity is a Record:
+        1. Fetch all the datafiles associated with the record.
+        2. Compute spectrogram for each file in the record.
+        
+    If the entity is a Datafile:
+        Store the results in a CSV file with the corresponding timestamp and axis for each spectrogram time slice.
+
+    Args:
+        entity (Record|Datafile): The record or datafile whose raw data is going to be used to compute the spectrogram(s).
+    """
+    
+        
+    if isinstance(entity, Record):
+        for datafile in entity.datafile_set.all():
+            threading.Thread(target=compute_spectrogram, args=[datafile]).start()
+        
+    if isinstance(entity, Datafile):
+        datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
+        
+        with open(datafile_path) as file:
+            
