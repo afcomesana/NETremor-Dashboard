@@ -8,7 +8,7 @@ from django.conf import settings
 from django.core.files.storage import default_storage
 from django.core.exceptions import ObjectDoesNotExist
 
-from .utils import save_subject
+from .utils import save_subject, process_record_data
 
 # OTHER PYTHON LIBRARIES
 import os
@@ -20,8 +20,8 @@ from csvsort import csvsort
 from datetime import datetime
 from pytz import timezone
 from dotenv import load_dotenv
+from scipy import signal
 import threading
-
 
 load_dotenv()
 API_KEY      = os.getenv("API_KEY")
@@ -48,34 +48,39 @@ def ambulatory(request):
         return HttpResponseBadRequest("No se han enviado archivos.")
     
     # Get subject and record data:
-    body_filepath = os.path.join(settings.DATAFILES_DIR, "%s.json" % uuid.uuid1().hex)
-    default_storage.save(body_filepath, request.FILES["body.json"])
+    body_temp_filepath = os.path.join(settings.DATAFILES_DIR, "%s.json" % uuid.uuid1().hex)
+    default_storage.save(body_temp_filepath, request.FILES["body.json"])
     
-    with open(body_filepath, "r") as file:
+    with open(body_temp_filepath, "r") as file:
         body_data = json.load(file)
     
-    os.remove(body_filepath)
+    os.remove(body_temp_filepath)
     
-    # Split tasks and subject data:
+    # Get tasks from the all the data:
     try:
         recorded_tasks = body_data.pop("recorded_tasks")
         if len(recorded_tasks) == 0:
             return HttpResponseBadRequest("No hay tareas asociadas.")
-        
+
     except KeyError:
         return HttpResponseBadRequest("Falta el campo 'recordedTasks' en la solicitud.")
 
-    
+
+    # Get the defined added_on timestamp of this ambulatory record:    
     try:
         record_added_on = body_data.pop("record_added_on")
+        
+        # Parse the received timestamp in milliseconds to an object that django can understand:
         record_added_on = datetime.fromtimestamp(record_added_on/1000).astimezone(timezone(settings.TIME_ZONE))
+        
     except KeyError:
         return HttpResponseBadRequest("Falta el campo 'record_added_on' en la solicitud.")
     
     # Record ID in this database model is generated automatically
     del body_data["record_id"]
     
-    # Standarize tasks IDs and names to avoid repetitions and inconsistencies when talking about the same task:
+    # Standarize tasks IDs and names to avoid repetitions and inconsistencies when talking about the same task
+    # among different sources and records:
     save_tasks(recorded_tasks)
     
     # Save/update subject in database:
@@ -88,7 +93,7 @@ def ambulatory(request):
         return HttpResponseBadRequest(error_message)
     
     
-    # Create record:
+    # Create and attach record to the subject:
     try:
         record = Record(subject = subject, type="ambulatory", added_on=record_added_on)
         record.save()
@@ -97,8 +102,13 @@ def ambulatory(request):
         return HttpResponseServerError
     
 
-    # Save data files and corresponding tasks:
+    # Save raw data files and corresponding tasks:
     for task in recorded_tasks:
+        
+        # task will be a dictionary with information about the task
+        # description, task_id, task_name, files corresponding to
+        # each sensor, and so on
+        
         for sensor in SENSOR_NAMES:
             try:
                 # Store the file in the data files directory:
@@ -112,6 +122,7 @@ def ambulatory(request):
                 
                 default_storage.save(filepath, file)
                 
+                # TODO: do this sorting in a parallel process to lighten waiting time
                 # Sort the data based on timestamp (4th column, columns 0 indexed)
                 csvsort(filepath, [3])
                 
@@ -119,6 +130,7 @@ def ambulatory(request):
                 datafile = Datafile(record=record, name=filename, sensor=sensor)
                 datafile.save()
                 
+                # Store the relation between the task, the record and the datafile:
                 if "task_id" in task.keys():
                     Datafile_task_rel(
                         record=record,
@@ -132,14 +144,17 @@ def ambulatory(request):
                 print("Current task doesn't have %s file" % sensor)
                 continue
         
+
     if record.datafile_set.count() == 0:
         record.delete()
         return HttpResponseBadRequest("This record is already saved.")
     
-    # Trigger computation of spectrograms upon received data without
-    # blocking the response sending
-    threading.Thread(target = compute_spectrogram, args = [record]).start()
-
+    
+    # Execute parallelized processes to avoid high response time
+    # (number of processes defaults to os.cpu_count())
+    threading.Thread(target=process_record_data, args=[record]).start()    
+    
+    
     return HttpResponse("OK")
 
 @csrf_exempt
@@ -323,89 +338,3 @@ def index(request):
 def records(request, subject_id):
     subject = get_object_or_404(Subject, pk=subject_id)
     return render(request, "dashboard/records.html", {"subject": subject})
-
-def compute_spectrogram(entity):
-    """
-    Given an entity (record|datafile), compute the spectrograms of the raw sensor data.
-    
-    If the entity is a Record:
-        1. Fetch all the datafiles associated with the record.
-        2. Compute spectrogram for each file in the record.
-        
-    If the entity is a Datafile:
-        Store the results in a CSV file with the corresponding timestamp and axis for each spectrogram time slice.
-
-    Args:
-        entity (Record|Datafile): The record or datafile whose raw data is going to be used to compute the spectrogram(s).
-    """
-    
-        
-    if isinstance(entity, Record):
-        for datafile in entity.datafile_set.all():
-            threading.Thread(target=compute_spectrogram, args=[datafile]).start()
-        
-    if isinstance(entity, Datafile):
-        datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
-        
-        with open(datafile_path) as file:
-            
-            ######################################################################
-            # SPECTROGRAM COMPUTATION
-            ######################################################################
-            
-            # def band_pass_filter(data, low_pass_frequency, high_pass_frequency, sampling_frequency):
-            # # N: order of the filter
-            # # Wn: critical frequency
-            # b, a = signal.butter(N=4, Wn=[low_pass_frequency, high_pass_frequency], btype="bandpass", fs=sampling_frequency)
-            # # returns numerator and denominator of the polynomials of the IIR filter
-
-            # # filtfilt the input acceleracion_(x|y|z) filtered
-            # return signal.filtfilt(b, a, signal.filtfilt(b, a, data))
-            
-            # DATA_DIR = "ambulatory-data/b261383e019eba47c32416a232c3181c94da4dab457878b20cd0f10797203c10-ambulatory-38"
-
-            # # Select a file corresponding to the task of brushing teeth;
-            # TEST_FILE = next(filter(lambda filename: re.search(r"[0-9]+\.csv$", filename) is not None, os.listdir(DATA_DIR)))
-
-            # with open(os.path.join(DATA_DIR, TEST_FILE)) as file:
-            #     next(file)
-            #     data = list(map(lambda line: float(line.split(",")[0]), file))
-                        
-            # # Bandpass filter to remove voluntary motion and noise:
-
-            # from utils import bandpass_filter
-
-            # filtered_data = bandpass_filter(data, 2, 8, 30)
-
-            # t = np.arange(len(data))
-
-            # plt.plot(t, data)
-            # plt.plot(t, filtered_data)
-            
-            
-            # # Compute spectrogram:
-            # SAMPLE_FREQ    = 30 # Herz
-            # SAMPLE_PERIOD  = 1 / SAMPLE_FREQ # seconds
-            # HOP_SECONDS    = 1 # seconds
-            # HOP_SAMPLES    = HOP_SECONDS*SAMPLE_FREQ
-            # WINDOW_SECONDS = 2
-            # WINDOW_SIZE    = WINDOW_SECONDS*SAMPLE_FREQ
-            # OVERSAMPLING_FACTOR = 16
-
-            # fig, ax1 = plt.subplots()
-
-            # gaussian_window = signal.windows.gaussian(WINDOW_SIZE, std=12, sym=True)
-
-            # SFT = signal.ShortTimeFFT(gaussian_window, hop=HOP_SAMPLES, fs=SAMPLE_FREQ, mfft=OVERSAMPLING_FACTOR*SAMPLE_FREQ, scale_to="psd")
-            # psd = SFT.spectrogram(filtered_data)
-
-            # t_lo, t_hi = SFT.extent(len(data))[:2] # time range of the spectrogram
-            # print(SFT.p_num(len(data))) # number of time slices
-            # print(SFT.delta_t) # in seconds
-            # print(SFT.delta_f) # in Hz
-
-            # ax1.set(xlim=(t_lo, t_hi))
-
-
-            # psd_db = 10 * np.log10(np.fmax(psd, 1e-4))
-            # im1 = ax1.imshow(psd_db, origin="lower", aspect="auto", extent=SFT.extent(len(data)), cmap="magma")

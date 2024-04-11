@@ -1,4 +1,13 @@
+# PYTHON LIBRARIES
+import os
+import multiprocessing
+from csvsort import csvsort
+
+# DJANGO FRAMEWORK
 from endpoint.models import Subject
+from django.conf import settings
+
+
 
 def save_subject(post_fields):
     # Save/update subject in database:
@@ -44,3 +53,52 @@ def get_choices_keys(choices):
     - list[str] the keys of the choices
     """
     return list(map(lambda choice: choice[0], choices))
+
+def process_record_data(record):
+    """
+    Applies the computations required to extract the information from the raw datafile.
+    
+    1. Sort the data of each datafile in the record according to its timestamps.
+    2. a. Compute spectrogram
+    2. b. Apply bradykinetics computations.
+    2. c. Apply daily life activities.
+
+    Args:
+        record (Record): record whose data is going to be processed.
+    """
+    
+    # Create pool to carry out parallelized computations:
+    pool = multiprocessing.Pool()
+    
+    # 1. Sort the data of each datafile in the record according to its timestamps.
+    pool.map(sort_csv_file, list(zip(record.datafile_set.all(), ["timestamp"]*record.datafile_set.count())))
+    
+    # TODO: Make sure data does not need to be interpolated.
+    
+def sort_csv_file(datafile, key, separator = ","):
+    """
+    Sort a CSV file according given a column key.
+
+    Args:
+        datafile (Datafile): instance of the Datafile class with info about raw sensor data.
+        key (string): column which will be used to sort the file.
+        separator (string): string used in the CSV file to define the columns (default is ",").
+    """
+    
+    # Define the actual path of the datafile:
+    datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
+
+    # Find the column index of the key used to sort:
+    with open(datafile_path, "r") as file:
+        keys = file.readline().split(separator)
+        
+        try:
+            key_index = keys.index(key)
+            
+        # Key is not part of the columns:
+        except ValueError:
+            # File won't be sorted.
+            return
+    
+    # Sort the file:
+    csvsort(datafile_path, [key_index], delimiter=separator)
