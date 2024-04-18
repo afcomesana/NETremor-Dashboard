@@ -59,9 +59,13 @@ class Datafile(models.Model):
     def __str__(self):
         return self.name
     
-    record = models.ForeignKey("Record", models.CASCADE)
-    name   = models.CharField(max_length=255)
-    sensor = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True) 
+    record              = models.ForeignKey("Record", models.CASCADE)
+    name                = models.CharField(max_length=255)
+    sensor              = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True) 
+    delta_t             = models.PositiveIntegerField(null=True)
+    timestamp_threshold = models.PositiveIntegerField(null=True)
+    timestamp_colname   = models.CharField(max_length=255, null=True)
+    separator           = models.CharField(max_length=10, null=True)
     
 class Spectrogram(models.Model):
     datafile = models.ForeignKey("Datafile", models.CASCADE)

@@ -15,6 +15,7 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR       = Path(__file__).resolve().parent.parent
 DATAFILES_DIR = Path.joinpath(BASE_DIR, "data-files")
+IMUFILES_DIR  = Path.joinpath(BASE_DIR, "imu-files")
 
 SENSOR_CHOICES = [
     ("accelerometer", "Accelerometer"),

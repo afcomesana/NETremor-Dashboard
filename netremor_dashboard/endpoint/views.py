@@ -9,6 +9,7 @@ from django.core.files.storage import default_storage
 from django.core.exceptions import ObjectDoesNotExist
 
 from .utils import save_subject, process_record_data
+import imu
 
 # OTHER PYTHON LIBRARIES
 import os
@@ -22,6 +23,7 @@ from pytz import timezone
 from dotenv import load_dotenv
 from scipy import signal
 import threading
+import multiprocessing
 
 load_dotenv()
 API_KEY      = os.getenv("API_KEY")
@@ -220,22 +222,29 @@ def continuous(request):
                 print("Skipping not recognized sensor file: %s." % file)
                 continue
             
-            # Get or create database instance:
-            try:
-                datafile = record.datafile_set.get(sensor = sensor)
-            except Datafile.DoesNotExist:
-                filename = re.sub(r'\.dat$', ".csv", file)
+            # Create database instance and insert file:
+            filename = re.sub(r'\.dat$', ".csv", file)
+            
+            if os.path.exists(os.path.join(settings.DATAFILES_DIR, filename)):
+                filename, extension = filename.split(".")
+                filename = "%s-%s.%s" % (filename, uuid.uuid1().hex, extension)
+            
+            # Store data file instance in database:
+            datafile_args = {
+                "record": record,
+                "name": filename,
+                "sensor": sensor,
                 
-                # Store data file instance in database:
-                datafile_args = {
-                    "record": record,
-                    "name": filename,
-                    "sensor": sensor
-                }
-                
-                datafile = Datafile(**datafile_args)
-                datafile.save()
-                
+                # TODO: Send this arguments in the request
+                "delta_t": 30,
+                "timestamp_threshold": 200,
+                "timestamp_colname": "timestamp",
+                "separator": ",",
+            }
+            
+            datafile = Datafile(**datafile_args)
+            datafile.save()
+            
             # Save tasks recorded in continuous record:
             if len(recorded_tasks) > 0:
                 for task in recorded_tasks:
@@ -249,41 +258,15 @@ def continuous(request):
 
             filepath = os.path.join(settings.DATAFILES_DIR, datafile.name)
             
-            # First creating this file
-            if not os.path.exists(filepath):
-                default_storage.save(filepath, request.FILES[file])
-                
-            # File exists, append incoming content to the existing one
-            else:
-                temporary_filepath = os.path.join(settings.DATAFILES_DIR, "temporary-%s" % datafile.name)
-                default_storage.save(temporary_filepath, request.FILES[file])
-                
-                incoming_file = open(temporary_filepath, "r")
-                
-                # Remove first row with column names:
-                incoming_file_content = incoming_file.read()
-                column_names = re.search(r'[a-z]\n', incoming_file_content)
-                
-                if not column_names is None:
-                    _, end_row_index = column_names.span()
-                    incoming_file_content = incoming_file_content[end_row_index:]
-                    
-                incoming_file.close()
-                
-                os.remove(temporary_filepath)
-                        
-                # Append context to continuous record
-                with open(filepath, "a") as stored_file:
-                    stored_file.write(incoming_file_content)
-                    
-            # Sort the data based on timestamp (4th column, columns 0 indexed)
-            csvsort(filepath, [3])
+            default_storage.save(filepath, request.FILES[file])
             
     except Exception as e:
         print("Error during continuous record saving process:", e)
         return HttpResponseServerError("Unexpected error in server.")
         
-
+    # TODO: Throw handle new datafiles process
+    threading.Thread(target = process_record_datafiles, args = [record]).start()
+    
     return HttpResponse(200)
 
 
@@ -324,6 +307,22 @@ def get_ambulatory_record_filename(basename, extension = "csv", index = 0):
     
     return filepath
 
+def process_record_datafiles(record):
+    
+    datafiles = record.datafile_set.all()
+    
+    pool = multiprocessing.Pool(processes=datafiles.count())
+    
+    csv_filepaths = tuple(map(lambda datafile: os.path.join(settings.DATAFILES_DIR, datafile.name), datafiles))
+    imu_filepaths = tuple(map(lambda datafile: os.path.join(settings.IMUFILES_DIR, re.sub(r'\.csv$', ".imu", datafile.name)), datafiles))
+    wimu_args     = tuple(map(lambda datafile: (datafile.delta_t, datafile.timestamp_threshold, datafile.timestamp_colname, datafile.separator), datafiles))
+    wimu_args     = tuple(map(lambda filepaths, args: filepaths + args, zip(csv_filepaths, imu_filepaths), wimu_args))
+    
+    for wimu_arg in wimu_args:
+        print(wimu_arg)
+    
+    imu_filepaths = pool.starmap(imu.wimu, wimu_args)
+    print("Process record datafiles finished:", imu_filepaths)
 
 def index(request):
     subjects_list = Subject.objects.all()

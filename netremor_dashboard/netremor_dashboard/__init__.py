@@ -6,3 +6,4 @@ os.environ['DJANGO_SETTINGS_MODULE'] = 'netremor_dashboard.settings'
 # If the directory doesn't exists, create it:
 if not os.path.isdir(settings.DATAFILES_DIR):
     os.mkdir(settings.DATAFILES_DIR, 755)
+    os.mkdir(settings.IMUFILES_DIR, 755)
