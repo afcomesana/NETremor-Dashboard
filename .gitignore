@@ -5,3 +5,4 @@
 /netremor_dashboard/data-files/
 .env
 .docs
+.DS_Store

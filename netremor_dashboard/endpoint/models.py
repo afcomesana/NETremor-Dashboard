@@ -67,6 +67,13 @@ class Datafile(models.Model):
     timestamp_colname   = models.CharField(max_length=255, null=True)
     separator           = models.CharField(max_length=10, null=True)
     
+class Imufile(models.Model):
+    record            = models.ForeignKey("Record", models.CASCADE, null=True)
+    datafile          = models.ForeignKey("Datafile", models.CASCADE, null=True)
+    name              = models.CharField(max_length=255)
+    sensor            = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True) 
+    initial_timestamp = models.PositiveBigIntegerField()
+    
 class Spectrogram(models.Model):
     datafile = models.ForeignKey("Datafile", models.CASCADE)
     name = models.CharField(max_length=255)
@@ -92,16 +99,26 @@ class Datafile_task_rel(models.Model):
     datafile  = models.ForeignKey("Datafile", models.CASCADE)
     task      = models.ForeignKey("Task", models.CASCADE)
     trial     = models.IntegerField(null=True)
-    starts_at = models.DateTimeField(null=True)
-    ends_at   = models.DateTimeField(null=True)
+    starts_at = models.PositiveBigIntegerField(null=True)
+    ends_at   = models.PositiveBigIntegerField(null=True)
 
-@receiver(post_delete, sender=Datafile)
+@receiver(post_delete)
 def signal_data_file_deleted(sender, instance, using, **kwargs):
-    """When a Datafile object is deleted, delete its corresponding file in the system.
+    """When a Datafile or Imufile object is deleted, delete its corresponding file in the system.
 
     Args:
-        instance: the Datafile instance that has been deleted.
+        instance: Datafile or Imufile instance that has been deleted.
     """
-    data_file_path = os.path.join(settings.DATAFILES_DIR, instance.name)
-    if os.path.isfile(data_file_path):
-        os.remove(data_file_path)
+
+    if isinstance(instance, Datafile):
+        dirname = settings.DATAFILES_DIR
+        
+    elif isinstance(instance, Imufile):
+        dirname = settings.IMUFILES_DIR
+        
+    else:
+        return
+    
+    filepath = os.path.join(dirname, instance.name)
+    if os.path.isfile(filepath):
+        os.remove(filepath)

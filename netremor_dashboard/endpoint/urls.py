@@ -4,8 +4,8 @@ from . import views
 
 app_name = "endpoint"
 urlpatterns = [
-    path("ambulatory/", views.ambulatory, name="ambulatory"),
-    path("ambulatory", views.ambulatory, name="ambulatory"),
-    path("continuous/", views.continuous, name="continuous"),
-    path("continuous", views.continuous, name="continuous"),
+    path("ambulatory/", views.save_record, name="ambulatory"),
+    path("ambulatory", views.save_record, name="ambulatory"),
+    path("continuous/", views.save_record, name="continuous"),
+    path("continuous", views.save_record, name="continuous"),
 ]

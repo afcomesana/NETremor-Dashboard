@@ -1,12 +1,47 @@
 # PYTHON LIBRARIES
 import os
+import re
+import uuid
+import threading
 import multiprocessing
 from csvsort import csvsort
 
-# DJANGO FRAMEWORK
-from endpoint.models import Subject
-from django.conf import settings
+# CUSTOM MODULES
+import imu
 
+# DJANGO FRAMEWORK
+from endpoint.models import Subject, Task, Record, Datafile, Imufile, Datafile_task_rel
+from django.conf import settings
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseServerError
+from django.core.files.storage import default_storage
+
+SENSOR_NAMES = list(map(lambda sensor: sensor[0], settings.SENSOR_CHOICES))
+
+def save_tasks(incoming_tasks):
+    """
+    Save new tasks in the database.
+
+    Args:
+        incoming_tasks (Dict[]): Array with the tasks belonging to the record that has been sent.
+        Each item will have at least the following three keys:
+        - task_id
+        - task_name
+        - task_description
+    """
+    for task in incoming_tasks:
+        if "task_id" in task.keys():
+            task["task_id"] = task["task_id"].upper()
+    
+    # Create list with each item being the arguments for creating the task that is not yet in the database
+    current_stored_tasks = Task.objects.values_list("id", flat=True).distinct()
+    tasks_to_store       = list(map(lambda task: {
+        "id": task["task_id"],
+        "name": task["task_name"] if "task_name" in task.keys() else None,
+        "description": task["task_description"] if "task_description" in task.keys() else None,
+    }, filter(lambda incoming_task: "task_id" in incoming_task.keys() and incoming_task["task_id"] not in current_stored_tasks, incoming_tasks)))
+    
+    # Storing those tasks that do not exist in the database:
+    map(lambda task: Task(**task).save(), tasks_to_store)
 
 
 def save_subject(post_fields):
@@ -25,10 +60,10 @@ def save_subject(post_fields):
             }
         )
         
-        if subject.dominant_hand not in get_choices_keys(Subject.DOMINANT_HAND_CHOICES):
+        if subject.dominant_hand not in get_model_field_choices_keys(Subject.DOMINANT_HAND_CHOICES):
             subject.dominant_hand = None
             
-        if subject.gender not in get_choices_keys(Subject.GENDER_CHOICES):
+        if subject.gender not in get_model_field_choices_keys(Subject.GENDER_CHOICES):
             subject.gender = None
             
         if isinstance(subject.diagnosis, str) and not subject.diagnosis.strip():
@@ -41,8 +76,24 @@ def save_subject(post_fields):
     
     return subject
     
+def save_imufile(imu_filepath, datafile = None, record = None):
+    _, initial_timestamp, _ = imu.rimu(imu_filepath, only_header=True)
     
-def get_choices_keys(choices):
+    imufile_args = {
+        "name": os.path.basename(imu_filepath),
+        "initial_timestamp": initial_timestamp,
+    }
+    
+    if isinstance(datafile, Datafile):
+        imufile_args["datafile"] = datafile
+        imufile_args["sensor"]   = datafile.sensor
+        
+    if isinstance(record, Record):
+        imufile_args["record"] = record
+    
+    Imufile(**imufile_args).save()
+    
+def get_model_field_choices_keys(choices):
     """
     Get the keys of the choices of a Model class from Django.
     
@@ -54,28 +105,40 @@ def get_choices_keys(choices):
     """
     return list(map(lambda choice: choice[0], choices))
 
-def process_record_data(record):
+
+def process_record_datafiles(record):
     """
-    Applies the computations required to extract the information from the raw datafile.
-    
-    1. Sort the data of each datafile in the record according to its timestamps.
-    2. a. Compute spectrogram
-    2. b. Apply bradykinetics computations.
-    2. c. Apply daily life activities.
+    1. Sort record datafiles.
+    2. Format data to IMU file type.
 
     Args:
-        record (Record): record whose data is going to be processed.
+        record (Record): Record whose files are going to be parsed to IMU format.
     """
     
-    # Create pool to carry out parallelized computations:
-    pool = multiprocessing.Pool()
+    datafiles = record.datafile_set.all()
     
-    # 1. Sort the data of each datafile in the record according to its timestamps.
-    pool.map(sort_csv_file, list(zip(record.datafile_set.all(), ["timestamp"]*record.datafile_set.count())))
+    # 1. Sort record datafiles (by default the sort key is the "timestamp").
+    # multiprocessing.Pool can't be used for this sorting process because the
+    # process uses the multiprocessig itself and would raise an error
+    [sort_csv_file(datafile) for datafile in datafiles]
     
-    # TODO: Make sure data does not need to be interpolated.
     
-def sort_csv_file(datafile, key, separator = ","):
+    # 2. Format data to IMU file type.
+    pool = multiprocessing.Pool(processes=datafiles.count())
+    
+    csv_filepaths = tuple(map(lambda datafile: os.path.join(settings.DATAFILES_DIR, datafile.name), datafiles))
+    imu_filepaths = tuple(map(lambda datafile: os.path.join(settings.IMUFILES_DIR, re.sub(r'\.csv$', ".imu", datafile.name)), datafiles))
+    wimu_args     = tuple(map(lambda datafile: (datafile.delta_t, datafile.timestamp_threshold, datafile.timestamp_colname, datafile.separator), datafiles))
+    wimu_args     = tuple(map(lambda filepaths, args: filepaths + args, zip(csv_filepaths, imu_filepaths), wimu_args))
+    
+    imu_filepaths = pool.starmap(imu.wimu, wimu_args)
+
+    # Save IMU files in the database.
+    for datafile, imufiles in zip(datafiles, imu_filepaths):
+        [save_imufile(imufile, datafile, record) for imufile in imufiles]
+
+    
+def sort_csv_file(datafile, key = "timestamp", separator = ","):
     """
     Sort a CSV file according given a column key.
 
@@ -90,8 +153,8 @@ def sort_csv_file(datafile, key, separator = ","):
 
     # Find the column index of the key used to sort:
     with open(datafile_path, "r") as file:
-        keys = file.readline().split(separator)
         
+        keys = list(map(lambda colname: colname.strip(), file.readline().split(separator)))
         try:
             key_index = keys.index(key)
             
@@ -102,3 +165,106 @@ def sort_csv_file(datafile, key, separator = ","):
     
     # Sort the file:
     csvsort(datafile_path, [key_index], delimiter=separator)
+    
+
+def save_ambulatory_record(request, subject, recorded_tasks, record_added_on):
+    
+    # Create and attach record to the subject:
+    record = Record(subject = subject, type="ambulatory", added_on=record_added_on)
+    record.save()
+    
+    # Save raw data files and corresponding tasks:
+    for task in recorded_tasks:
+        
+        # task will be a dictionary with information about the task
+        # description, task_id, task_name, files corresponding to
+        # each sensor, and so on
+        
+        for sensor in SENSOR_NAMES:
+            try:
+                # Store the file in the data files directory:
+                file      = request.FILES[task["%s_filename" % sensor]]
+                filepath  = os.path.join(settings.DATAFILES_DIR, file.name)
+                
+                if os.path.exists(filepath):
+                    print("File", file.name, "already exists. Data not saved.")
+                    continue
+                
+                default_storage.save(filepath, file)
+                
+                # TODO: Add necessary fields to IMU encoding
+                datafile = Datafile(record=record, name=file.name, sensor=sensor)
+                datafile.save()
+                
+                # Store the relation between the task, the record and the datafile:
+                if "task_id" in task.keys():
+                    Datafile_task_rel(record=record, datafile=datafile, task_id=task["task_id"], trial=task["trial"]).save()                    
+                
+            except KeyError:
+                print("Current task doesn't have %s file" % sensor)
+                continue
+        
+
+    if record.datafile_set.count() == 0:
+        record.delete()
+        return HttpResponseBadRequest("This record is already saved.")
+    
+    # Process stored data without blocking the response to the request
+    threading.Thread(target=process_record_datafiles, args=[record]).start()
+    
+    return HttpResponse("OK")
+
+
+def save_continuous_record(request, subject, recorded_tasks, record_added_on):
+    # Create or retrieves record:
+    record, _ = subject.record_set.get_or_create(type="continuous", defaults={"added_on": record_added_on})
+    
+    try:
+        for file in request.FILES:
+
+            # Do not save files whose sensor could not be identified:
+            sensor = next(filter(lambda sensor_name: sensor_name in file, SENSOR_NAMES), None)
+            if sensor is None:
+                print("Skipping not recognized sensor file: %s." % file)
+                continue
+            
+            # Create database instance and insert file:
+            filename = re.sub(r'\.dat$', ".csv", file)
+            
+            # Prevent overwriting existing files
+            # TODO: Check if the first timestamp is the same to avoid repeating data
+            if os.path.exists(os.path.join(settings.DATAFILES_DIR, filename)):
+                filename, extension = filename.split(".")
+                filename = "%s-%s.%s" % (filename, uuid.uuid1().hex, extension)
+            
+            # Store data file instance in database:
+            datafile_args = {
+                "record": record,
+                "name": filename,
+                "sensor": sensor,
+                
+                # TODO: Send this arguments in the request
+                "delta_t": 30,
+                "timestamp_threshold": 200,
+                "timestamp_colname": "timestamp",
+                "separator": ",",
+            }
+            
+            datafile = Datafile(**datafile_args)
+            datafile.save()
+            
+            # Save tasks recorded in continuous record:
+            for task in recorded_tasks:
+                Datafile_task_rel(record=record, datafile=datafile, task_id=task["task_id"], starts_at=task["starts_at"], ends_at=task["ends_at"],).save()
+
+            filepath = os.path.join(settings.DATAFILES_DIR, datafile.name)
+            default_storage.save(filepath, request.FILES[file])
+            
+    except Exception as e:
+        print("Error during continuous record saving process:", e)
+        return HttpResponseServerError("Unexpected error in server.")
+        
+    # TODO: Throw handle new datafiles process
+    threading.Thread(target = process_record_datafiles, args = [record]).start()
+    
+    return HttpResponse(200)
