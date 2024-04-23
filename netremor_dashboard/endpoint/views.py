@@ -17,7 +17,7 @@ from django.core.files.storage import default_storage
 from django.core.exceptions import ObjectDoesNotExist
 
 load_dotenv()
-API_KEY      = os.getenv("API_KEY")
+API_KEY = os.getenv("API_KEY")
 
 @csrf_exempt # disable default csrf security checks from django
 def save_record(request):
@@ -36,6 +36,7 @@ def save_record(request):
     
     if len(request.FILES) == 0:
         return HttpResponseBadRequest("No se han enviado archivos.")
+
 
     # Data about the subject and record is expected to be sent in the "body.json" file.
     body_filepath = os.path.join(settings.DATAFILES_DIR, "%s.json" % uuid.uuid1().hex)
@@ -65,6 +66,12 @@ def save_record(request):
         return HttpResponseBadRequest("Falta el campo 'record_added_on' en la solicitud.")
     
     try:
+        delta_t = int(body_data.pop("delta_t"))
+    
+    except KeyError:
+        delta_t = settings.DEFAULT_DELTA_T
+    
+    try:
         # If the subject already exists, it will be updated.
         subject = utils.save_subject(body_data)
     except KeyError as error_message:
@@ -76,6 +83,5 @@ def save_record(request):
     record_type = list(filter(lambda item: bool(item.strip()), request.path.split("/")))[-1]
     save_record_callback = getattr(utils, "save_%s_record" % record_type)
 
-    return save_record_callback(request, subject, recorded_tasks, record_added_on)
-    
+    return save_record_callback(request, subject, recorded_tasks, record_added_on, delta_t)
     

@@ -31,6 +31,8 @@ class Subject(models.Model):
     diagnosis          = models.TextField(null=True)
 
     def age(self):
+        if self.birth_year is None:
+            return 0
         return datetime.datetime.today().year - self.birth_year
     # @admin.display(
     #     boolean=True,
@@ -65,7 +67,10 @@ class Datafile(models.Model):
     delta_t             = models.PositiveIntegerField(null=True)
     timestamp_threshold = models.PositiveIntegerField(null=True)
     timestamp_colname   = models.CharField(max_length=255, null=True)
+    # initial_timestamp   = models.PositiveBigIntegerField(null=True)
+    # final_timestamp     = models.PositiveBigIntegerField(null=True)
     separator           = models.CharField(max_length=10, null=True)
+    is_processed        = models.BooleanField(default=False)
     
 class Imufile(models.Model):
     record            = models.ForeignKey("Record", models.CASCADE, null=True)
@@ -73,6 +78,7 @@ class Imufile(models.Model):
     name              = models.CharField(max_length=255)
     sensor            = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True) 
     initial_timestamp = models.PositiveBigIntegerField()
+    final_timestamp   = models.PositiveBigIntegerField()
     
 class Spectrogram(models.Model):
     datafile = models.ForeignKey("Datafile", models.CASCADE)

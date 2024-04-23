@@ -23,22 +23,24 @@ SENSOR_CHOICES = [
     ("gyroscope", "Gyroscope"),
 ]
 
+DEFAULT_DELTA_T = 30
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-i8um7+i47%m67y_gp(kvu6_#unxp*pt&9i&cg#4zjrb8l@*eo3'
 
-# REDIRECT TRAFFI FROM HTTP TO HTTPS:
+# REDIRECT TRAFFIC FROM HTTP TO HTTPS:
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SECURE_SSL_REDIRECT = True
+# SECURE_SSL_REDIRECT = True
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
 
 ALLOWED_HOSTS = ['*']
-CSRF_TRUSTED_ORIGINS = ["https://netremor.oriontech.es"]
+CSRF_TRUSTED_ORIGINS = ["https://netremor.oriontech.es", "http://netremor.oriontech.es"]
 
 LOGIN_URL = "/login/"
 

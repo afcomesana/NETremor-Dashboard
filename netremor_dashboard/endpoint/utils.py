@@ -12,6 +12,7 @@ import imu
 # DJANGO FRAMEWORK
 from endpoint.models import Subject, Task, Record, Datafile, Imufile, Datafile_task_rel
 from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseServerError
 from django.core.files.storage import default_storage
 
@@ -77,11 +78,12 @@ def save_subject(post_fields):
     return subject
     
 def save_imufile(imu_filepath, datafile = None, record = None):
-    _, initial_timestamp, _ = imu.rimu(imu_filepath, only_header=True)
+    initial_timestamp, final_timestamp = imu.rimu(imu_filepath, only_timestamp_range=True)
     
     imufile_args = {
         "name": os.path.basename(imu_filepath),
         "initial_timestamp": initial_timestamp,
+        "final_timestamp": final_timestamp,
     }
     
     if isinstance(datafile, Datafile):
@@ -120,7 +122,7 @@ def process_record_datafiles(record):
     # 1. Sort record datafiles (by default the sort key is the "timestamp").
     # multiprocessing.Pool can't be used for this sorting process because the
     # process uses the multiprocessig itself and would raise an error
-    [sort_csv_file(datafile) for datafile in datafiles]
+    # [sort_csv_file(datafile) for datafile in datafiles]
     
     
     # 2. Format data to IMU file type.
@@ -136,6 +138,8 @@ def process_record_datafiles(record):
     # Save IMU files in the database.
     for datafile, imufiles in zip(datafiles, imu_filepaths):
         [save_imufile(imufile, datafile, record) for imufile in imufiles]
+        datafile.is_processed = True
+        datafile.save()
 
     
 def sort_csv_file(datafile, key = "timestamp", separator = ","):
@@ -147,7 +151,7 @@ def sort_csv_file(datafile, key = "timestamp", separator = ","):
         key (string): column which will be used to sort the file.
         separator (string): string used in the CSV file to define the columns (default is ",").
     """
-    
+
     # Define the actual path of the datafile:
     datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
 
@@ -214,8 +218,7 @@ def save_ambulatory_record(request, subject, recorded_tasks, record_added_on):
     
     return HttpResponse("OK")
 
-
-def save_continuous_record(request, subject, recorded_tasks, record_added_on):
+def save_continuous_record(request, subject, recorded_tasks, record_added_on, delta_t):
     # Create or retrieves record:
     record, _ = subject.record_set.get_or_create(type="continuous", defaults={"added_on": record_added_on})
     
@@ -229,7 +232,7 @@ def save_continuous_record(request, subject, recorded_tasks, record_added_on):
                 continue
             
             # Create database instance and insert file:
-            filename = re.sub(r'\.dat$', ".csv", file)
+            filename = re.sub(r'\.(dat|txt)$', ".csv", file)
             
             # Prevent overwriting existing files
             # TODO: Check if the first timestamp is the same to avoid repeating data
@@ -237,6 +240,8 @@ def save_continuous_record(request, subject, recorded_tasks, record_added_on):
                 filename, extension = filename.split(".")
                 filename = "%s-%s.%s" % (filename, uuid.uuid1().hex, extension)
             
+            
+            print("Saving data file with delta_t:", delta_t)
             # Store data file instance in database:
             datafile_args = {
                 "record": record,
@@ -244,7 +249,7 @@ def save_continuous_record(request, subject, recorded_tasks, record_added_on):
                 "sensor": sensor,
                 
                 # TODO: Send this arguments in the request
-                "delta_t": 30,
+                "delta_t": delta_t,
                 "timestamp_threshold": 200,
                 "timestamp_colname": "timestamp",
                 "separator": ",",

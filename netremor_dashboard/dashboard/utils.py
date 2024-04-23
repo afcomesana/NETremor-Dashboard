@@ -1,3 +1,18 @@
+# PYTHON LIBRARIES
+import os
+import re
+import csv
+import math
+import requests
+import itertools
+import numpy as np
+from scipy import signal
+
+# CUSTOM MODULES
+from utils import get_random_string
+import imu
+
+# DJANGO FRAMEWORK
 from django.contrib.auth import authenticate, login
 from django.shortcuts import render, redirect
 from django.contrib.auth.models import User
@@ -5,11 +20,18 @@ from django.conf import settings
 from dashboard.models import Verification
 from django.urls import reverse
 
-from utils import get_random_string
 
-import re
-import requests
+RECORD_PARSE = {
+    "x": float,
+    "y": float,
+    "z": float,
+    "timestamp": int,
+    "heartRate": int,
+}
 
+###############
+# HANDLE USERS
+###############
 def user_exists(username):
     if re.search("@", username):
         return User.objects.filter(email = username).exists()
@@ -45,7 +67,6 @@ def is_password_valid(password):
     
     return True
     
-
 def login_user(request, template, context, form_fields):
     
     # Get username and password from form
@@ -136,7 +157,6 @@ def register_user(request, template, context, form_fields):
     response.set_cookie("registered_user_email", user.email, max_age=10)
     return response
 
-
 def send_verification_email(user):
     data = {
         "email_to": user.email,
@@ -156,4 +176,156 @@ def send_verification_email(user):
     req = requests.post("https://mailproxy.oriontech.es", json = data)
     
     print(req.text)
+ 
+#################
+# HANDLE RECORDS   
+#################
+def get_record_tasks(record, columns, callback):
+
+    columns      = list(set(["task_id"] + columns))
+    record_tasks = record.datafile_task_rel_set.values(*columns).distinct().order_by("task_id")
+    tasks        = {}
+    
+    for task_id, group in itertools.groupby(record_tasks, lambda item: item["task_id"]):
+                
+        tasks[task_id] = {
+            "task": Task.objects.get(id=task_id),
+            "trials": list(map(callback, group)), 
+        }
+        
+    return tasks.values()
+
+
+def get_continuous_datafile(datafile, samples, timestamp_from = None, timestamp_to = None):
+    """Read inertial sensor data from raw file.
+
+    Args:
+        datafile (Datafile): datafile from the database the has been requested
+        samples (Int): number of samples to read from the datafile (this is given by the screen width of the user)
+        selection (Float[]): proportion of the file at which start and finish to read
+
+    Returns:
+        JSON: Raw data from the datafile.
+        List of objects with the following keys: "x", "y", "z", "timestamp"
+    """
+    
+    record_data   = []
+    datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
+    
+    with open(datafile_path) as file:
+        
+        # Count how many rows are there in the CSV file:
+        file_rows = sum(1 for _ in file) - 1
+        file.seek(0)
+        
+        if timestamp_from is None and timestamp_to is None:
+        
+            # Number of rows to skip per read row
+            step = max(1, math.floor(file_rows / samples))
+
+            index = 0
+        
+            for row in csv.DictReader(file):
+                
+                # This row number has to be skipped:
+                if index % step != 0:
+                    index += 1
+                    continue
+                
+                index += 1
+
+                record_data += [{key: RECORD_PARSE[key](row[key]) for key in row}]
+                
+        else:
+            
+            for row in csv.DictReader(file):
+                
+                if int(row["timestamp"]) < timestamp_from:
+                    continue
+                
+                if int(row["timestamp"]) > timestamp_to:
+                    break
+
+                record_data += [{key: RECORD_PARSE[key](row[key]) for key in row}]
+
+        
+    record_data = sorted(record_data, key=lambda item: item["timestamp"]) if len(record_data) > 0 else None
+ 
+    return record_data
+    
+def get_continuous_imufile(imufile, samples, timestamp_from = None, timestamp_to = None):
+    imufile_path = os.path.join(settings.IMUFILES_DIR, imufile.name)
+    
+    data, step, initial_timestamp, delta_t = imu.rimu(imufile_path, n_samples = int(samples))
+    
+    return [{"x": item[0], "y": item[1], "z": item[2], "timestamp": initial_timestamp + (step*delta_t*index)} for index, item in enumerate(data)][1:]
+    
+    
+def get_ambulatory_record_trial_data(record, task_id, trial):
+
+    datafile_ids = record.datafile_task_rel_set.filter(task_id=task_id, trial=trial).values_list("datafile", flat=True)
+    datafiles    = Datafile.objects.filter(pk__in=datafile_ids)
+    
+    record_data = []
+    
+    for datafile in datafiles:
+        
+        datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
+        
+        # Limit file reading, we are going to send the first two hours
+        # If the user wants to see more, it will have to be requested
+        with open(datafile_path) as file:
+            
+            for row in csv.DictReader(file):
+
+                data_row = {}
+                
+                for key in row:
+                    data_row[key] = RECORD_PARSE[key](row[key])
+
+                data_row["sensor"] = datafile.sensor
+
+                record_data += [data_row]
+        
+    record_data = sorted(record_data, key=lambda item: item["timestamp"]) if len(record_data) > 0 else None
+ 
+    return record_data
+
+def get_ambulatory_record_trial_spectrogram(record, task_id, trial, axis = "x"):
+    
+    LOW_PASS_FREQ  = 2 # Herz
+    HIGH_PASS_FREQ = 8 # Herz
+    SAMPLE_FREQ    = 30 # Herz
+    SAMPLE_PERIOD  = 1 / SAMPLE_FREQ # seconds
+    HOP_SECONDS    = 1 # seconds
+    HOP_SAMPLES    = HOP_SECONDS*SAMPLE_FREQ
+    WINDOW_SECONDS = 2
+    WINDOW_SIZE    = WINDOW_SECONDS*SAMPLE_FREQ
+    
+    OVERSAMPLING_FACTOR = 16
+    GAUSSIAN_WINDOW = signal.windows.gaussian(WINDOW_SIZE, std=12, sym=True)
+    
+    raw_data = get_ambulatory_record_trial_data(record, task_id, trial)
+
+    raw_data_acc  = np.array(list(map(lambda item: item[axis], filter(lambda item: item["sensor"] == "accelerometer", raw_data))))
+    raw_data_gyro = np.array(list(map(lambda item: item[axis], filter(lambda item: item["sensor"] == "gyroscope", raw_data))))
+    
+    # Numerator and denominator of the polynomials of the IIR filter
+    b, a = signal.butter(N=4, Wn=[LOW_PASS_FREQ, HIGH_PASS_FREQ], btype="bandpass", fs=SAMPLE_FREQ)
+
+    # filtfilt the input acceleracion_(x|y|z) filtered
+    raw_data_acc  = signal.filtfilt(b, a, signal.filtfilt(b, a, raw_data_acc))
+    raw_data_gyro = signal.filtfilt(b, a, signal.filtfilt(b, a, raw_data_gyro))
+
+    
+    SFT = signal.ShortTimeFFT(GAUSSIAN_WINDOW, hop=HOP_SAMPLES, fs=SAMPLE_FREQ, mfft=OVERSAMPLING_FACTOR*SAMPLE_FREQ, scale_to="psd")
+    
+    Sx_acc  = SFT.spectrogram(raw_data_acc).tolist()
+    Sx_gyro = SFT.spectrogram(raw_data_gyro).tolist()
+    
+    
+    Sx_acc  = list(map(lambda item: {"psd": item, "sensor": "accelerometer"}, Sx_acc))
+    Sx_gyro = list(map(lambda item: {"psd": item, "sensor": "gyroscope"}, Sx_gyro))
+    
+    return Sx_acc + Sx_gyro
     

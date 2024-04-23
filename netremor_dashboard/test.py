@@ -1,9 +1,16 @@
+import os
+import sys
+import imu
 import numpy as np
 from csvsort import csvsort
 
-filepath = "/home/ging/netremor/data-files/2f73366bc5765cb9bdc1c7f436d03067f200958ff5e7a95635b5577815b62e96-accelerometer.csv"
+filepath = "/home/ging/netremor/data-files/03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4-accelerometer-continuous-1709047462061.csv"
 
-# csvsort(filepath, [3], delimiter=",")
+imu.wimu(filepath, "test.imu", 30, 200, "timestamp", ",")
+
+sys.exit(0)
+
+csvsort(filepath, [3], delimiter=",")
 
 with open(filepath, "r") as file:
     gaps = []
@@ -11,7 +18,7 @@ with open(filepath, "r") as file:
     
     next(file)
     count = 0
-    for line in file:
+    for index, line in enumerate(file):
         timestamp = int(line.split(",")[3])
         
         if last_timestamp is None:
@@ -22,10 +29,9 @@ with open(filepath, "r") as file:
         
         if gap > 200:
             count += 1
-        
-        elif timestamp < last_timestamp:
-            print(gap)
-            print("Unordered timestamp")
+            
+        elif gap > 45:
+            print("Interpolation gap: %s (%s)" % (gap, index))
         
         else:
             gaps += [gap]

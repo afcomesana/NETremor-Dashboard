@@ -10,26 +10,15 @@ from .constants import LOGIN_FORM_FIELDS
 from django.contrib.auth import logout
 
 from utils import get_random_string
-from .utils import send_verification_email
+from .utils import send_verification_email, get_record_tasks, get_continuous_datafile, get_continuous_imufile
 
 import os
 import csv
 import json
-import math
-import itertools
 import zipfile
 from pytz import timezone
 import time
-import numpy as np
-from scipy import signal
 
-RECORD_PARSE = {
-    "x": float,
-    "y": float,
-    "z": float,
-    "timestamp": int,
-    "heartRate": int,
-}
 
 @login_required
 def index(request):
@@ -299,12 +288,25 @@ def record(request, record_id):
         
         # 3.b)
         if record.type == "continuous":
-            
             sensor, metric, samples, time_range = json.loads(request.body).values()
             
-            # Since files in the continuous case are much bigger, we only read one of the sensors:
-            datafile       = record.datafile_set.get(sensor=sensor)
-            response_data  = get_continuous_datafile(datafile, samples, time_range)
+            if not time_range:
+                timestamp_from = timestamp_to = None
+                
+            else:
+                timestamp_from, timestamp_to = time_range
+                timestamp_from = int(timestamp_from)*1000
+                timestamp_to   = int(timestamp_to)*1000
+            
+            # Compare performance reading:
+            
+            # 1) CSV files:
+            # datafile      = record.datafile_set.get(sensor=sensor)
+            # response_data = get_continuous_datafile(datafile, samples, timestamp_from, timestamp_to)
+            
+            # 2) IMU files:
+            imufile = record.imufile_set.get(sensor=sensor)
+            response_data = get_continuous_imufile(imufile, samples, timestamp_from, timestamp_to)
             
         elif record.type == "ambulatory":
             params = json.loads(request.body)
@@ -362,172 +364,3 @@ def record(request, record_id):
         response
     )
 
-def get_record_tasks(record, columns, callback):
-
-    columns      = list(set(["task_id"] + columns))
-    record_tasks = record.datafile_task_rel_set.values(*columns).distinct().order_by("task_id")
-    tasks        = {}
-    
-    for task_id, group in itertools.groupby(record_tasks, lambda item: item["task_id"]):
-                
-        tasks[task_id] = {
-            "task": Task.objects.get(id=task_id),
-            "trials": list(map(callback, group)), 
-        }
-        
-    return tasks.values()
-
-
-def get_continuous_datafile(datafile, samples, time_range = False):
-    """Read inertial sensor data from raw file.
-
-    Args:
-        datafile (Datafile): datafile from the database the has been requested
-        samples (Int): number of samples to read from the datafile (this is given by the screen width of the user)
-        selection (Float[]): proportion of the file at which start and finish to read
-
-    Returns:
-        JSON: Raw data from the datafile.
-        List of objects with the following keys: "x", "y", "z", "timestamp"
-    """
-    
-    
-    record_data   = []
-    datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
-    
-    
-    with open(datafile_path) as file:
-        
-        # Count how many rows are there in the CSV file:
-        file_rows = sum(1 for _ in file) - 1
-        file.seek(0)
-        
-        if not time_range:
-        
-            # Number of rows to skip per read row
-            step = max(1, math.floor(file_rows / samples))
-                        
-            index = 0
-        
-            for row in csv.DictReader(file):
-                
-                # This row number has to be skipped:
-                if index % step != 0:
-                    index += 1
-                    continue
-                
-                index += 1
-                
-                data_row = {}
-                for key in row:
-                    data_row[key] = RECORD_PARSE[key](row[key])
-
-                record_data += [data_row]
-                
-        else:
-            start_timestamp, end_timestamp = time_range
-            
-            start_timestamp -= 1
-            end_timestamp   += 1
-            
-            start_timestamp *= 1000
-            end_timestamp   *= 1000
-            
-            for row in csv.DictReader(file):
-                
-                if int(row["timestamp"]) < start_timestamp:
-                    continue
-                
-                if int(row["timestamp"]) > end_timestamp:
-                    break
-                
-                data_row = {}
-                for key in row:
-                    data_row[key] = RECORD_PARSE[key](row[key])
-
-                record_data += [data_row]
-
-        
-    record_data = sorted(record_data, key=lambda item: item["timestamp"]) if len(record_data) > 0 else None
- 
-    return record_data
-    
-    
-    
-def get_ambulatory_record_trial_data(record, task_id, trial):
-
-    datafile_ids = record.datafile_task_rel_set.filter(task_id=task_id, trial=trial).values_list("datafile", flat=True)
-    datafiles    = Datafile.objects.filter(pk__in=datafile_ids)
-    
-    record_data = []
-    
-    for datafile in datafiles:
-        
-        datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
-        
-        # Limit file reading, we are going to send the first two hours
-        # If the user wants to see more, it will have to be requested
-        with open(datafile_path) as file:
-            
-            for row in csv.DictReader(file):
-
-                data_row = {}
-                
-                for key in row:
-                    data_row[key] = RECORD_PARSE[key](row[key])
-
-                data_row["sensor"] = datafile.sensor
-
-                record_data += [data_row]
-        
-    record_data = sorted(record_data, key=lambda item: item["timestamp"]) if len(record_data) > 0 else None
- 
-    return record_data
-
-def get_ambulatory_record_trial_spectrogram(record, task_id, trial, axis = "x"):
-    
-    LOW_PASS_FREQ  = 2 # Herz
-    HIGH_PASS_FREQ = 8 # Herz
-    SAMPLE_FREQ    = 30 # Herz
-    SAMPLE_PERIOD  = 1 / SAMPLE_FREQ # seconds
-    HOP_SECONDS    = 1 # seconds
-    HOP_SAMPLES    = HOP_SECONDS*SAMPLE_FREQ
-    WINDOW_SECONDS = 2
-    WINDOW_SIZE    = WINDOW_SECONDS*SAMPLE_FREQ
-    
-    OVERSAMPLING_FACTOR = 16
-    GAUSSIAN_WINDOW = signal.windows.gaussian(WINDOW_SIZE, std=12, sym=True)
-    
-    raw_data = get_ambulatory_record_trial_data(record, task_id, trial)
-
-    raw_data_acc  = np.array(list(map(lambda item: item[axis], filter(lambda item: item["sensor"] == "accelerometer", raw_data))))
-    raw_data_gyro = np.array(list(map(lambda item: item[axis], filter(lambda item: item["sensor"] == "gyroscope", raw_data))))
-    
-    # Numerator and denominator of the polynomials of the IIR filter
-    b, a = signal.butter(N=4, Wn=[LOW_PASS_FREQ, HIGH_PASS_FREQ], btype="bandpass", fs=SAMPLE_FREQ)
-
-    # filtfilt the input acceleracion_(x|y|z) filtered
-    raw_data_acc  = signal.filtfilt(b, a, signal.filtfilt(b, a, raw_data_acc))
-    raw_data_gyro = signal.filtfilt(b, a, signal.filtfilt(b, a, raw_data_gyro))
-
-    
-    SFT = signal.ShortTimeFFT(GAUSSIAN_WINDOW, hop=HOP_SAMPLES, fs=SAMPLE_FREQ, mfft=OVERSAMPLING_FACTOR*SAMPLE_FREQ, scale_to="psd")
-    
-    Sx_acc  = SFT.spectrogram(raw_data_acc).tolist()
-    Sx_gyro = SFT.spectrogram(raw_data_gyro).tolist()
-    
-    
-    Sx_acc  = list(map(lambda item: {"psd": item, "sensor": "accelerometer"}, Sx_acc))
-    Sx_gyro = list(map(lambda item: {"psd": item, "sensor": "gyroscope"}, Sx_gyro))
-    
-    return Sx_acc + Sx_gyro
-    
-
-def get_task_name_data_metric(record_id, task_name, metric):
-    
-    return True
-
-
-def get_ambulatory_record_data(record):
-    
-    return True

@@ -6,7 +6,7 @@ client   = MongoClient(uri)
 
 # print(client.server_info())
 
-database = client["sth_netremor_prueba"]
+database = client["sth_netremor"]
 
 ambulatory_collection      = database["sth_ambulatory_data"]
 ambulatory_collection_acc  = database["sth_ambulatory_data_accelerometer"]

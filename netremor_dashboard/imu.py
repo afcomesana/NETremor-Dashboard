@@ -52,7 +52,6 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
         list[str]: containing the file paths of the outputted files
     """
     
-    
     if delta_t < 1 or delta_t > MAX_UNSIGNED_SHORT_INT or not isinstance(delta_t, int):
         raise ValueError("Delta t must be an integer between (between 1 and %s)." % (MAX_UNSIGNED_SHORT_INT))
 
@@ -109,23 +108,37 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
     next(csv_file)
     
     # This variable will be used to check if the timestamp_threshold has been surpassed
-    last_timestamp          = None
-    interpolation_threshold = int(delta_t*1.5)
+    last_timestamp = None
+    
+    # This will be used to decide whether to interpolate values between samples in the CSV file
+    # or not. If the distance between samples is lower than the timestamp_threshold but higher than
+    # the normal distance and a half, then interpolate the corresponding amount of samples.
+    interpolation_threshold  = int(delta_t*1.5)
+    
+    # This will be used to measure the extra time that has been added to the signal due to the interpolation process.
+    # To prevent large difference between the real signal and the IMU-formatted signal, this value will be used to
+    # skip interpolated samples.
+    missing_time = 0
 
     for line in csv_file:
+        
         # Split timestamp from the values that will be stored in the body file:
         values    = line.split(separator)
         timestamp = int(values[timestamp_index])
         del values[timestamp_index]
         
-        values = list(map(lambda item: float(item), values))
+        values = [float(item) for item in values]
         
-        # When timestamp threshold is surpassed, close current output file and create a new one:
-        if last_timestamp is not None and timestamp_threshold is not None:
+        # Check if file has to be changed or if interpolation has to be made.
+        if last_timestamp is not None:
             
             gap = timestamp - last_timestamp
+            missing_time += gap - delta_t
             
-            if gap > timestamp_threshold:
+            # When timestamp threshold is surpassed, close current output file and create a new one:
+            if timestamp_threshold is not None and gap > timestamp_threshold:
+                missing_time = 0
+                
                 imu_file.close()
                 imu_filepaths += [imu_filepath]
                 
@@ -138,21 +151,23 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
                 imu_file = open(imu_filepath, "wb")
                 imu_file.write(get_imu_header(delta_t, timestamp, columns))
                 
-            # TODO: If threshold is not reached but gap between samples is greater than delta_t*1.5, interpolate.
-            elif gap > interpolation_threshold:
+            # Fill in missing values:
+            elif missing_time >= delta_t:
+            # elif gap > interpolation_threshold:
     
-                interpolation_samples_amount = math.ceil(gap/delta_t)
-                
+                # interpolation_samples_amount = math.ceil(gap/delta_t)
+                interpolation_samples_amount = math.floor(missing_time/delta_t) + 1
+                missing_time    %= delta_t
+            
                 for interpolation_sample_index in range(1, interpolation_samples_amount):
-                    interpolation_values      = list(map(lambda last_value, value: last_value + ((value - last_value)/interpolation_samples_amount)*interpolation_sample_index))
+                    interpolation_values      = [last_value + ((value - last_value)/interpolation_samples_amount)*interpolation_sample_index for last_value, value in zip(last_values, values)]
                     interpolation_output_line = struct.pack(body_line_binary_format, *interpolation_values)
                     imu_file.write(interpolation_output_line)
-                pass
+
         
         last_timestamp = timestamp
         last_values    = values
-        
-        output_line = struct.pack(body_line_binary_format, *values)
+        output_line    = struct.pack(body_line_binary_format, *values)
         imu_file.write(output_line)
         
     
@@ -164,7 +179,7 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
     return imu_filepaths
 
 
-def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_to = None, step = 1, offset = 0, only_header = False):
+def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_to = None, step = 1, offset = 0, only_header = False, only_timestamp_range = False, n_samples = None):
     """
     Read data from IMU file.
     That data can be either returned as a list of values or written in a CSV file, if output_filepath is provided.
@@ -201,13 +216,22 @@ def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_
     byte_columns = b''
     while (current_byte := imu_file.read(BYTES_PER_CHAR_8_BIT)) != b'\x00':
         byte_columns += current_byte
+        
 
     columns       = byte_columns.decode("utf-8")
     columns_count = len(columns.split(","))
     
+    body_line_binary_format = get_imu_values_type(columns_count)
+    bytes_per_line          = struct.calcsize(body_line_binary_format)
+    total_samples           = (os.path.getsize(imu_filepath) - imu_file.tell()) / bytes_per_line
+    final_timestamp         = initial_timestamp + total_samples*delta_t
+    
     if only_header:
         return (delta_t, initial_timestamp, columns)
     
+    elif only_timestamp_range:
+        return (initial_timestamp, final_timestamp)
+
     if isinstance(output, list):
         output += [tuple(columns.split(","))]
         
@@ -218,17 +242,17 @@ def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_
     # Read IMU file body:
     ########################
 
-    body_line_binary_format = get_imu_values_type(columns_count)
-    bytes_per_line          = struct.calcsize(body_line_binary_format)
-
+    # Parse timestamps to pointer positions in file:
     if timestamp_to is not None:
         timestamp_to = max(0, imu_file.tell() + bytes_per_line*math.floor((timestamp_to - initial_timestamp)/delta_t))
 
 
-    # Parse timestamps to pointer positions in file:
     if timestamp_from is not None and timestamp_from > initial_timestamp:
         timestamp_from = max(0, bytes_per_line*math.ceil((timestamp_from - initial_timestamp)/delta_t))
         imu_file.read(timestamp_from)
+    
+    if n_samples is not None:
+        step = int(total_samples // n_samples)
     
     # Skip offset lines:
     imu_file.read(offset*bytes_per_line)
@@ -248,7 +272,7 @@ def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_
         imu_file.seek(imu_file.tell() + (step-1)*bytes_per_line)
         
     if isinstance(output, list):
-        return output
+        return output, step, initial_timestamp, delta_t
     else:
         output.close()
 
