@@ -10,8 +10,7 @@ from .constants import LOGIN_FORM_FIELDS
 from django.contrib.auth import logout
 
 from utils import get_random_string
-from .utils import send_verification_email, get_record_tasks, get_continuous_datafile, get_continuous_imufile
-
+from .utils import send_verification_email, get_record_tasks, get_continuous_record_csv_data, get_continuous_record_imu_data
 import os
 import csv
 import json
@@ -294,19 +293,17 @@ def record(request, record_id):
                 timestamp_from = timestamp_to = None
                 
             else:
+                time_range = [int(item)*1000 for item in time_range]
                 timestamp_from, timestamp_to = time_range
-                timestamp_from = int(timestamp_from)*1000
-                timestamp_to   = int(timestamp_to)*1000
             
             # Compare performance reading:
             
             # 1) CSV files:
-            # datafile      = record.datafile_set.get(sensor=sensor)
-            # response_data = get_continuous_datafile(datafile, samples, timestamp_from, timestamp_to)
+            # response_data = get_continuous_record_csv_data(record, samples, timestamp_from, timestamp_to)
             
             # 2) IMU files:
-            imufile = record.imufile_set.get(sensor=sensor)
-            response_data = get_continuous_imufile(imufile, samples, timestamp_from, timestamp_to)
+            response_data = get_continuous_record_imu_data(record, samples, timestamp_from, timestamp_to)
+            
             
         elif record.type == "ambulatory":
             params = json.loads(request.body)

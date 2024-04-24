@@ -165,8 +165,6 @@ export default class Plotter {
                 });
             }
 
-            this.sensorData = this.data.filter(sample => sample.sensor == this.selectedSensor);
-
         } else if ( this.RECORD_TYPE == "continuous" ) {
 
             if ( !this.timeRange ) {
@@ -185,9 +183,8 @@ export default class Plotter {
                     timeRange: this.timeRange
                 });
             }
-
-            this.sensorData = this.data;
         }
+        this.sensorData = this.data.filter(sample => sample.sensor == this.selectedSensor);
 
     }
 
@@ -216,6 +213,9 @@ export default class Plotter {
             }
 
             data = await response.json();
+            data = data.flat();
+
+            console.log(data);
             this.hideSpinner()
 
         } catch(error) {

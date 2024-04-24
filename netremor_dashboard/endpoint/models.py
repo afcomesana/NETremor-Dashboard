@@ -67,8 +67,8 @@ class Datafile(models.Model):
     delta_t             = models.PositiveIntegerField(null=True)
     timestamp_threshold = models.PositiveIntegerField(null=True)
     timestamp_colname   = models.CharField(max_length=255, null=True)
-    # initial_timestamp   = models.PositiveBigIntegerField(null=True)
-    # final_timestamp     = models.PositiveBigIntegerField(null=True)
+    initial_timestamp   = models.PositiveBigIntegerField(null=True)
+    final_timestamp     = models.PositiveBigIntegerField(null=True)
     separator           = models.CharField(max_length=10, null=True)
     is_processed        = models.BooleanField(default=False)
     

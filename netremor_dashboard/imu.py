@@ -179,7 +179,7 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
     return imu_filepaths
 
 
-def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_to = None, step = 1, offset = 0, only_header = False, only_timestamp_range = False, n_samples = None):
+def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_to = None, step = 1, offset = 0, n_samples = None, only_header = False, only_timestamp_range = False):
     """
     Read data from IMU file.
     That data can be either returned as a list of values or written in a CSV file, if output_filepath is provided.
@@ -252,7 +252,7 @@ def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_
         imu_file.read(timestamp_from)
     
     if n_samples is not None:
-        step = int(total_samples // n_samples)
+        step = max(1, math.floor(total_samples / n_samples))
     
     # Skip offset lines:
     imu_file.read(offset*bytes_per_line)

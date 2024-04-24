@@ -12,6 +12,7 @@ import imu
 # DJANGO FRAMEWORK
 from endpoint.models import Subject, Task, Record, Datafile, Imufile, Datafile_task_rel
 from django.conf import settings
+from django.db.models import Min, Max
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseServerError
 from django.core.files.storage import default_storage
@@ -43,7 +44,6 @@ def save_tasks(incoming_tasks):
     
     # Storing those tasks that do not exist in the database:
     map(lambda task: Task(**task).save(), tasks_to_store)
-
 
 def save_subject(post_fields):
     # Save/update subject in database:
@@ -135,10 +135,16 @@ def process_record_datafiles(record):
     
     imu_filepaths = pool.starmap(imu.wimu, wimu_args)
 
-    # Save IMU files in the database.
     for datafile, imufiles in zip(datafiles, imu_filepaths):
+        
+        # Save IMU files in the database.
         [save_imufile(imufile, datafile, record) for imufile in imufiles]
-        datafile.is_processed = True
+        
+        # Update null values of the datafile in the database.
+        initial_timestamp, final_timestamp = datafile.imufile_set.aggregate(Min("initial_timestamp"), Max("final_timestamp")).values()
+        datafile.is_processed              = True
+        datafile.initial_timestamp         = initial_timestamp
+        datafile.final_timestamp           = final_timestamp
         datafile.save()
 
     

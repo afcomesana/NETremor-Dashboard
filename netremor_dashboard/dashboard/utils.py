@@ -6,6 +6,7 @@ import math
 import requests
 import itertools
 import numpy as np
+import multiprocessing
 from scipy import signal
 
 # CUSTOM MODULES
@@ -17,6 +18,7 @@ from django.contrib.auth import authenticate, login
 from django.shortcuts import render, redirect
 from django.contrib.auth.models import User
 from django.conf import settings
+from django.db.models import Max, Min
 from dashboard.models import Verification
 from django.urls import reverse
 
@@ -196,12 +198,25 @@ def get_record_tasks(record, columns, callback):
     return tasks.values()
 
 
-def get_continuous_datafile(datafile, samples, timestamp_from = None, timestamp_to = None):
-    """Read inertial sensor data from raw file.
+def read_record_csv_line(file, timestamp_colindex, separator = ",", colnames = None):
+    values    = file.readline().split(separator)
+    timestamp = int(values.pop(timestamp_colindex))
+    
+    if colnames is None:
+        return timestamp, values
+    
+    line_data              = {colname: float(value) for colname, value in zip(colnames, values)}
+    line_data["timestamp"] = timestamp
+    
+    return line_data
+    
+
+def get_continuous_record_csv_data(record, n_samples, timestamp_from = None, timestamp_to = None, timestamp_colname = "timestamp", separator = ","):
+    """Read inertial sensor data from CSV file.
 
     Args:
         datafile (Datafile): datafile from the database the has been requested
-        samples (Int): number of samples to read from the datafile (this is given by the screen width of the user)
+        n_samples (Int): number of samples to read from the datafile (this is given by the screen width of the user)
         selection (Float[]): proportion of the file at which start and finish to read
 
     Returns:
@@ -209,57 +224,139 @@ def get_continuous_datafile(datafile, samples, timestamp_from = None, timestamp_
         List of objects with the following keys: "x", "y", "z", "timestamp"
     """
     
-    record_data   = []
-    datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
+    output_data = []
+    filters     = {}
     
-    with open(datafile_path) as file:
+    if isinstance(timestamp_from, int):
+        filters["final_timestamp__gt"] = timestamp_from
         
-        # Count how many rows are there in the CSV file:
-        file_rows = sum(1 for _ in file) - 1
-        file.seek(0)
+    if isinstance(timestamp_to, int):
+        filters["initial_timestamp__lt"] = timestamp_to
+    
+    
+    datafiles = record.datafile_set.filter(**filters).order_by("initial_timestamp")
+    
+    # Define time span to assign a number of samples to each file:
+    
+    if timestamp_from is None:
+        timestamp_from = min(datafile.initial_timestamp for datafile in datafiles)
         
-        if timestamp_from is None and timestamp_to is None:
+    if timestamp_to is None:
+        timestamp_to = max(datafile.final_timestamp for datafile in datafiles)
+    
+    time_span = timestamp_to - timestamp_from
+    
+    for datafile in datafiles:
         
-            # Number of rows to skip per read row
-            step = max(1, math.floor(file_rows / samples))
+        data = []
+        
+        # The number of samples that will be read from the current file will be propotional to the
+        # time span of this datafile with respect to the total time span that will be read.
+        
+        file_initial_timestamp = max(timestamp_from, datafile.initial_timestamp)
+        file_final_timestamp   = min(timestamp_to, datafile.final_timestamp)
+        file_time_range        = file_final_timestamp - file_initial_timestamp
+        file_n_samples         = math.ceil(n_samples*((file_time_range) / time_span))
+        
+        filepath = os.path.join(settings.DATAFILES_DIR, datafile.name)
+        
+        with open(filepath) as file:
+            # Identify which column in the CSV corresponds to the timestamp:
+            colnames           = [colname.strip() for colname in file.readline().split(separator)]
+            timestamp_colindex = colnames.index(timestamp_colname)
+            colnames.pop(timestamp_colindex)
 
-            index = 0
-        
-            for row in csv.DictReader(file):
-                
-                # This row number has to be skipped:
-                if index % step != 0:
-                    index += 1
-                    continue
-                
-                index += 1
-
-                record_data += [{key: RECORD_PARSE[key](row[key]) for key in row}]
-                
-        else:
+            # Define how many lines in the CSV we have to skip to return a similar number of values to n_samples
+            # It is preferable to return more samples than less than n_samples, hence the math.floor function.
+            n_lines = sum(1 for _ in filter(lambda line: timestamp_from <= int(line.split(separator)[timestamp_colindex]) <= timestamp_to, file))
+            step    = max(1, math.floor(n_lines / file_n_samples))
             
-            for row in csv.DictReader(file):
-                
-                if int(row["timestamp"]) < timestamp_from:
-                    continue
-                
-                if int(row["timestamp"]) > timestamp_to:
-                    break
+            # Start reading the file from the first line excluding the line with the column names:
+            file.seek(0)
+            next(file)
+            
+            # Skip the lines until timestamp is in the time range:
+            timestamp, values = read_record_csv_line(file, timestamp_colindex, separator)
+            while timestamp < timestamp_from:
+                timestamp, values = read_record_csv_line(file, timestamp_colindex, separator)
 
-                record_data += [{key: RECORD_PARSE[key](row[key]) for key in row}]
+            line_data              = {colname: float(value) for colname, value in zip(colnames, values)}
+            line_data["timestamp"] = timestamp
+            line_data["sensor"]    = datafile.sensor
+            data                  += [line_data]
+            
+            keep_reading = True
+            while keep_reading:
+                
+                try:
+                    [next(file) for _ in range(1, step)]
+                    
+                    line_data = read_record_csv_line(file, timestamp_colindex, separator, colnames)
+                    timestamp = line_data["timestamp"]
+                    
+                    if timestamp > timestamp_to:
+                        keep_reading = False
+                        continue
+                    
+                    line_data["sensor"] = datafile.sensor
+                    data     += [line_data]                    
+                except StopIteration:
+                    keep_reading = False
 
+        output_data += [data]
+
+    return output_data
+
+def get_continuous_record_imu_data(record, n_samples, timestamp_from = None, timestamp_to = None):
+    
+    output_data = []
+    filters     = {}
+    
+    if isinstance(timestamp_from, int):
+        filters["final_timestamp__gt"] = timestamp_from
         
-    record_data = sorted(record_data, key=lambda item: item["timestamp"]) if len(record_data) > 0 else None
- 
-    return record_data
+    if isinstance(timestamp_to, int):
+        filters["initial_timestamp__lt"] = timestamp_to
     
-def get_continuous_imufile(imufile, samples, timestamp_from = None, timestamp_to = None):
-    imufile_path = os.path.join(settings.IMUFILES_DIR, imufile.name)
     
-    data, step, initial_timestamp, delta_t = imu.rimu(imufile_path, n_samples = int(samples))
+    imufiles = record.imufile_set.filter(**filters).order_by("initial_timestamp")
     
-    return [{"x": item[0], "y": item[1], "z": item[2], "timestamp": initial_timestamp + (step*delta_t*index)} for index, item in enumerate(data)][1:]
+    # Define time span to assign a number of samples to each file:
     
+    if timestamp_from is None:
+        timestamp_from = min(imufile.initial_timestamp for imufile in imufiles)
+        
+    if timestamp_to is None:
+        timestamp_to = max(imufile.final_timestamp for imufile in imufiles)
+    
+    time_span = timestamp_to - timestamp_from
+
+    for imufile in imufiles:
+        
+        # The number of samples that will be read from the current file will be propotional to the
+        # time span of this imufile with respect to the total time span that will be read.
+        
+        file_initial_timestamp = max(timestamp_from, imufile.initial_timestamp)
+        file_final_timestamp   = min(timestamp_to, imufile.final_timestamp)
+        file_time_range        = file_final_timestamp - file_initial_timestamp
+        file_n_samples         = math.ceil(n_samples*((file_time_range) / time_span))
+        
+        imufile_path = os.path.join(settings.IMUFILES_DIR, imufile.name)
+        
+        data, step, initial_timestamp, delta_t = imu.rimu(imufile_path, timestamp_from = timestamp_from, timestamp_to = timestamp_to, n_samples = file_n_samples)
+        columns = data.pop(0)
+        
+        file_data = []
+        for index, item in enumerate(data):
+            line_data = {colname: item[colindex] for colindex, colname in enumerate(columns)}
+            line_data["timestamp"] = initial_timestamp + (step*delta_t*index)
+            line_data["sensor"]    = imufile.sensor
+            
+            file_data += [line_data]
+    
+        output_data += [file_data]
+        
+    return output_data
     
 def get_ambulatory_record_trial_data(record, task_id, trial):
 
@@ -329,3 +426,16 @@ def get_ambulatory_record_trial_spectrogram(record, task_id, trial, axis = "x"):
     
     return Sx_acc + Sx_gyro
     
+def get_continuous_record_raw_data(record, n_samples = None, timestamp_from = None, timestamp_to = None):
+    
+    filters = {}
+    
+    if isinstance(timestamp_from, int):
+        filters["final_timestamp__gt"] = timestamp_from
+        
+    if isinstance(timestamp_to, int):
+        filters["initial_timestamp__lt"] = timestamp_to
+    
+    
+    imufiles = record.imufile_set.filter(**filters)
+    print(imufiles)
