@@ -33,7 +33,6 @@ def save_record(request):
     except KeyError:
         return HttpResponseForbidden("No se ha enviado clave de API.")
     
-    
     if len(request.FILES) == 0:
         return HttpResponseBadRequest("No se han enviado archivos.")
 
@@ -57,7 +56,7 @@ def save_record(request):
     except KeyError:
         recorded_tasks = []
 
-       
+
     try:
         record_added_on = body_data.pop("record_added_on")
         record_added_on = datetime.fromtimestamp(record_added_on/1000).astimezone(timezone(settings.TIME_ZONE))
@@ -84,4 +83,3 @@ def save_record(request):
     save_record_callback = getattr(utils, "save_%s_record" % record_type)
 
     return save_record_callback(request, subject, recorded_tasks, record_added_on, delta_t)
-    

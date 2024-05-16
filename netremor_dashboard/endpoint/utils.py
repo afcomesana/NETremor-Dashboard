@@ -1,10 +1,14 @@
 # PYTHON LIBRARIES
 import os
 import re
+import math
 import uuid
+import signal
 import threading
 import multiprocessing
+import numpy as np
 from csvsort import csvsort
+
 
 # CUSTOM MODULES
 import imu
@@ -43,7 +47,7 @@ def save_tasks(incoming_tasks):
     }, filter(lambda incoming_task: "task_id" in incoming_task.keys() and incoming_task["task_id"] not in current_stored_tasks, incoming_tasks)))
     
     # Storing those tasks that do not exist in the database:
-    map(lambda task: Task(**task).save(), tasks_to_store)
+    [Task(**task).save() for task in tasks_to_store]
 
 def save_subject(post_fields):
     # Save/update subject in database:
@@ -54,12 +58,7 @@ def save_subject(post_fields):
     del post_fields["subject_id"]
     
     try:
-        subject = Subject(
-            **{
-                field.name:
-                    post_fields[field.name] if field.name in post_fields else None for field in Subject._meta.fields
-            }
-        )
+        subject = Subject(**{field.name:post_fields[field.name] if field.name in post_fields else None for field in Subject._meta.fields})
         
         if subject.dominant_hand not in get_model_field_choices_keys(Subject.DOMINANT_HAND_CHOICES):
             subject.dominant_hand = None
@@ -105,7 +104,7 @@ def get_model_field_choices_keys(choices):
     Return:
     - list[str] the keys of the choices
     """
-    return list(map(lambda choice: choice[0], choices))
+    return [choice[0] for choice in choices]
 
 
 def process_record_datafiles(record):
@@ -147,6 +146,59 @@ def process_record_datafiles(record):
         datafile.final_timestamp           = final_timestamp
         datafile.save()
 
+    # Compute tremor files from imufiles
+    # [write_tremor_file(imufile) record.imufile_set.all()]
+    
+    
+def bandpass_filter(data, low_pass_frequency, high_pass_frequency, sampling_frequency):
+    # N: order of the filter
+    # returns numerator and denominator of the polynomials of the IIR filterw
+    b, a = signal.butter(N=4, Wn=[low_pass_frequency, high_pass_frequency], btype="bandpass", fs=sampling_frequency)
+
+    return signal.filtfilt(b, a, data)
+
+def write_tremor_file(imufile):
+    # 1. Read imu file
+    # 2. Rearrange output tuple to get all the axis values in the same tuple
+    # 3. Compute parallelwise each axis tremor values
+    
+    LOW_PASS_FREQ  = 2 # Herz
+    HIGH_PASS_FREQ = 10 # Herz
+    
+    delta_t = imufile.datafile.delta_t
+    
+    if not delta_t:
+        delta_t = settings.DEFAULT_DELTA_T
+    
+    sampling_frequency = 1/delta_t
+    
+    
+    imu_filepath = os.path.join(settings.IMUFILES_DIR, imufile.name)
+    
+    data = tuple(zip(*imu.rimu(imu_filepath)))
+    
+    n_axis = len(data)
+    bandpass_filter_args = (LOW_PASS_FREQ, HIGH_PASS_FREQ, sampling_frequency)
+    
+    with multiprocessing.Pool(processes=len(data)) as pool:
+        data = pool.starmap(bandpass_filter, [(axis_data, *bandpass_filter_args) for axis_data in data])
+    
+    axis_data = bandpass_filter(axis_data, LOW_PASS_FREQ, HIGH_PASS_FREQ, sampling_frequency)
+    hop_seconds = 1
+    hop_samples = int(hop_seconds * sampling_frequency)
+    
+    window_seconds = 3
+    window_size = int(3*sampling_frequency)
+    oversampling_factor = 16
+    
+    mfft = 2**math.ceil(math.log(oversampling_factor * sampling_frequency, 2))
+    
+    gaussian_window = signal.windows.gaussian(window_size, std=12, sym=True)
+    
+    SFT = signal.ShortTimeFFT(gaussian_window, hop=hop_samples, fs=sampling_frequency, mfft=mfft, scale_to="psd")
+    axis_data = 10*np.log10(np.fmax(SFT.spectrogram(axis_data), 1e-4))
+    
+    
     
 def sort_csv_file(datafile, key = "timestamp", separator = ","):
     """

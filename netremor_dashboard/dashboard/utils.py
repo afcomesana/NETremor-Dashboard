@@ -343,8 +343,7 @@ def get_continuous_record_imu_data(record, n_samples, timestamp_from = None, tim
         
         imufile_path = os.path.join(settings.IMUFILES_DIR, imufile.name)
         
-        data, step, initial_timestamp, delta_t = imu.rimu(imufile_path, timestamp_from = timestamp_from, timestamp_to = timestamp_to, n_samples = file_n_samples)
-        columns = data.pop(0)
+        data, delta_t, initial_timestamp, columns, step = imu.rimu(imufile_path, timestamp_from = timestamp_from, timestamp_to = timestamp_to, n_samples = file_n_samples)
         
         file_data = []
         for index, item in enumerate(data):

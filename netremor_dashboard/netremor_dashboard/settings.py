@@ -14,9 +14,10 @@ import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR      = Path(__file__).resolve().parent.parent
-DATAFILES_DIR = Path.joinpath(BASE_DIR, "data-files")
-IMUFILES_DIR  = Path.joinpath(BASE_DIR, "imu-files")
+BASE_DIR         = Path(__file__).resolve().parent.parent
+DATAFILES_DIR    = Path.joinpath(BASE_DIR, "data-files")
+IMUFILES_DIR     = Path.joinpath(BASE_DIR, "imu-files")
+TREMOR_FILES_DIR = Path.joinpath(BASE_DIR, "tremor-files")
 
 SENSOR_CHOICES = [
     ("accelerometer", "Accelerometer"),
@@ -32,7 +33,7 @@ DEFAULT_DELTA_T = 30
 SECRET_KEY = 'django-insecure-i8um7+i47%m67y_gp(kvu6_#unxp*pt&9i&cg#4zjrb8l@*eo3'
 
 # REDIRECT TRAFFIC FROM HTTP TO HTTPS:
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # SECURE_SSL_REDIRECT = True
 
 # SECURITY WARNING: don't run with debug turned on in production!

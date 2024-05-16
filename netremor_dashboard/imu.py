@@ -1,7 +1,9 @@
 import os
+import io
 import math
 import string
 import struct
+import multiprocessing
 
 # Binary parsing characters for struct library:
 UNSIGNED_SHORT_INT = 'H'
@@ -88,11 +90,10 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
     body_line_binary_format = get_imu_values_type(len(columns))
     
     columns = list(map(lambda col: "".join(filter(lambda char: char in string.ascii_lowercase, col.lower())), columns))
-    columns = (",".join(columns) + "\x00").encode("utf-8")
+    columns = (",".join(columns) + "\0").encode("utf-8")
     
     # Get first timestamp to store it in IMU file header:
     initial_timestamp = int(csv_file.readline().split(",")[timestamp_index].strip())
-    
     
     imu_file.write(get_imu_header(delta_t, initial_timestamp, columns))
 
@@ -109,11 +110,6 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
     
     # This variable will be used to check if the timestamp_threshold has been surpassed
     last_timestamp = None
-    
-    # This will be used to decide whether to interpolate values between samples in the CSV file
-    # or not. If the distance between samples is lower than the timestamp_threshold but higher than
-    # the normal distance and a half, then interpolate the corresponding amount of samples.
-    interpolation_threshold  = int(delta_t*1.5)
     
     # This will be used to measure the extra time that has been added to the signal due to the interpolation process.
     # To prevent large difference between the real signal and the IMU-formatted signal, this value will be used to
@@ -153,7 +149,6 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
                 
             # Fill in missing values:
             elif missing_time >= delta_t:
-            # elif gap > interpolation_threshold:
     
                 # interpolation_samples_amount = math.ceil(gap/delta_t)
                 interpolation_samples_amount = math.floor(missing_time/delta_t) + 1
@@ -194,7 +189,7 @@ def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_
         only_header(bool, optional): If True, IMU file body won't be read and the function will return the data in the
                                      header as a tuple. Defaults to False.
     Returns:
-        tuple[list[float]]: If output_filepath is provided, this function will return a list of tuples, each of one
+        list[tuple[float]]: If output_filepath is provided, this function will return a list of tuples, each of one
         with one float value per column in the columns header of the IMU file, or per columns in the original CSV file
         excluding timestamp.
         The first tuple in the list will be a string be the name of the column for that position in the following tuples
@@ -214,7 +209,7 @@ def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_
     initial_timestamp = struct.unpack(INITIAL_TIMESTAMP_TYPE, imu_file.read(BYTES_PER_UNSIGNED_LONG_LONG))[0]
 
     byte_columns = b''
-    while (current_byte := imu_file.read(BYTES_PER_CHAR_8_BIT)) != b'\x00':
+    while (current_byte := imu_file.read(BYTES_PER_CHAR_8_BIT)) != b'\0':
         byte_columns += current_byte
         
 
@@ -232,10 +227,7 @@ def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_
     elif only_timestamp_range:
         return (initial_timestamp, final_timestamp)
 
-    if isinstance(output, list):
-        output += [tuple(columns.split(","))]
-        
-    else:
+    if isinstance(output, io.TextIOWrapper):
         output.write(columns + "\n")
     
     ########################
@@ -265,14 +257,14 @@ def rimu(imu_filepath, output_filepath = None, timestamp_from = None, timestamp_
             output += [values]
             
         else:
-            values = tuple(map(lambda item: str(item), values))
+            values = tuple(map(str, values))
             output.write(",".join(values) + "\n")
 
         # Skip step lines:
         imu_file.seek(imu_file.tell() + (step-1)*bytes_per_line)
         
     if isinstance(output, list):
-        return output, step, initial_timestamp, delta_t
+        return output, delta_t, initial_timestamp, columns, step
     else:
         output.close()
 
@@ -299,9 +291,92 @@ def get_imu_header(delta_t, initial_timestamp, columns):
     return header
 
 
+def compute_tremor_amplitude(data, low_pass_freq, high_pass_freq, SFT):
+    
+    import numpy as np
+    from scipy import signal
+    
+    # N: order of the filter
+    # returns numerator and denominator of the polynomials of the IIR filterw
+    b, a = signal.butter(N=4, Wn=[low_pass_freq, high_pass_freq], btype="bandpass", fs=SFT.fs)
+    
+    data = signal.filtfilt(b, a, data)
+
+    data = SFT.spectrogram(data)
+    
+    # Parse to dB
+    data = 10*np.log10(np.fmax(data, 1e-4))
+    
+    max_freq_index = np.argmax(data, axis=0)
+    data = [data[row, col] for row, col in zip(max_freq_index, range(data.shape[1]))]
+    
+    frequencies = max_freq_index*SFT.delta_f
+    
+    return tuple(zip(frequencies, data))
+    
+
+
+def wtremor(imu_filepath, tremor_filepath, low_pass_freq, high_pass_freq, hop_seconds, window_seconds):
+
+    from scipy import signal
+    
+    data, delta_t, initial_timestamp, columns, _ = rimu(imu_filepath)
+
+    n_samples               = len(data)
+    data                    = tuple(zip(*data)) # tranpose data matrix, each row has all the values for an axis now
+    sampling_frequency      = (1/delta_t)*1000
+    hop_size                = int(hop_seconds * sampling_frequency)
+    window_size             = int(window_seconds*sampling_frequency)
+    oversampling_factor     = 16
+    mfft                    = 2**math.ceil(math.log(oversampling_factor * sampling_frequency, 2))
+    gaussian_window         = signal.windows.gaussian(window_size, std=12, sym=True)
+    SFT                     = signal.ShortTimeFFT(gaussian_window, hop=hop_size, fs=sampling_frequency, mfft=mfft, scale_to="psd")
+    tremor_args             = (low_pass_freq, high_pass_freq, SFT)
+    initial_t, final_t      = SFT.extent(n_samples)[:2]
+    first_no_padding_sample = SFT.lower_border_end[1]
+    last_no_padding_sample  = SFT.upper_border_begin(n_samples)[1]
+    
+    with multiprocessing.Pool(processes=len(columns.split(","))) as pool:
+        data = pool.starmap(compute_tremor_amplitude, [(axis_data, *tremor_args) for axis_data in data])
+        
+    # Tranpose data again:
+    data = tuple(zip(*data))
+    # each row one value (frequency, amplitude) of each axis now
+    
+    # Header for the tremor file
+    
+    # delta_t of the spectrogram (Float)
+    # initial_t of the spectrogram (can be negative due to pre-padding) (Float)
+    # initial_timestamp (Long long unsigned int)
+    # lower_border_end (Long long unsigned int)
+    # upper_border_end (Long long unsigned int)
+    
+    header  = struct.pack(BIG_ENDIAN + FLOAT_32_BIT, SFT.delta_t)
+    header += struct.pack(BIG_ENDIAN + FLOAT_32_BIT, initial_t)
+    header += struct.pack(BIG_ENDIAN + UNSIGNED_LONG_LONG, initial_timestamp)
+    header += struct.pack(BIG_ENDIAN + UNSIGNED_LONG_LONG, first_no_padding_sample)
+    header += struct.pack(BIG_ENDIAN + UNSIGNED_LONG_LONG, last_no_padding_sample)
+    header += struct.pack(BIG_ENDIAN + str(len(columns)) + STRING_8_BIT, columns.encode("utf-8") + b'\0')
+    
+    tremor_file = open(tremor_filepath, "wb")
+    
+    tremor_file.write(header)
+    
+    for row in data:
+        for axis_values in row:
+            tremor_line = struct.pack(BIG_ENDIAN + str(2) + FLOAT_32_BIT, *axis_values)
+            tremor_file.write(tremor_line)
+
+    
+    tremor_file.close()
+    
 if __name__ == "__main__":
     
     import sys
+    
+    wtremor("/home/ging/netremor/imu-files/38ec605012c411ef99d08c1759ee1f3c-accelerometer.imu", "test.tr", 2, 10, 1, 3)
+    sys.exit(0)
+    
     import getopt
     
     def display_help(exit_code = 0):
