@@ -104,7 +104,7 @@
                             <div class="h4 mb-3">Axis</div>
                             {% with axis_choices="x y z" %}
                                 {% for axis in axis_choices.split %}
-                                    <span class="axis-filter btn selected border cursor-pointer me-2 py-1 px-2" id="axis-{{ axis }}"> {{ axis | title }}</span>
+                                    <span class="axis-filter btn border cursor-pointer me-2 py-1 px-2" id="axis-{{ axis }}"> {{ axis | title }}</span>
                                 {% endfor %}
                             {% endwith %}
                         </div>
@@ -112,7 +112,7 @@
                         <!-- METRIC OPTIONS -->
                         <div class="col-12 col-sm-4">
                             <div class="h4 mb-3">Metrics</div>
-                            {% with metric_options="raw energy spectrogram" %}
+                            {% with metric_options="tremor raw" %}
                                 {% for metric in metric_options.split %}
                                     <span
                                         class="metric-option btn border me-2 p-1 {% if forloop.counter == 1 %}selected btn-primary{% endif %} {% if forloop.counter == 1 %}selected{% endif %}"

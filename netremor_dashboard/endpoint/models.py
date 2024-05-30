@@ -80,13 +80,13 @@ class Imufile(models.Model):
     initial_timestamp = models.PositiveBigIntegerField()
     final_timestamp   = models.PositiveBigIntegerField()
     
-# class Tremor_file(models.Model):
-#     record            = models.ForeignKey("Record", models.CASCADE, null=True)
-#     datafile          = models.ForeignKey("Datafile", models.CASCADE, null=True)
-#     name              = models.CharField(max_length=255)
-#     sensor            = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True) 
-#     initial_timestamp = models.PositiveBigIntegerField()
-#     final_timestamp   = models.PositiveBigIntegerField()
+class Tremor_file(models.Model):
+    record            = models.ForeignKey("Record", models.CASCADE, null=True)
+    datafile          = models.ForeignKey("Datafile", models.CASCADE, null=True)
+    name              = models.CharField(max_length=255)
+    sensor            = models.CharField(max_length=20, choices=settings.SENSOR_CHOICES, null=True) 
+    initial_timestamp = models.PositiveBigIntegerField()
+    final_timestamp   = models.PositiveBigIntegerField()
     
 class Task(models.Model):
     def __str__(self):
@@ -127,7 +127,7 @@ def signal_data_file_deleted(sender, instance, using, **kwargs):
         dirname = settings.IMUFILES_DIR
         
     elif isinstance(instance, Tremor_file):
-        dirname = settings.IMUFILES_DIR
+        dirname = settings.TREMOR_FILES_DIR
         
     else:
         return

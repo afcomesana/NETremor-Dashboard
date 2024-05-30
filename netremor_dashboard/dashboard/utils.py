@@ -20,6 +20,7 @@ from django.contrib.auth.models import User
 from django.conf import settings
 from django.db.models import Max, Min
 from dashboard.models import Verification
+from endpoint.models import Task
 from django.urls import reverse
 
 
@@ -307,56 +308,72 @@ def get_continuous_record_csv_data(record, n_samples, timestamp_from = None, tim
 
     return output_data
 
-def get_continuous_record_imu_data(record, n_samples, timestamp_from = None, timestamp_to = None):
+
+def get_continuous_record_data(record, sensor, metric, n_samples, timestamp_from = None, timestamp_to = None):
     
     output_data = []
-    filters     = {}
+    filters     = {"sensor": sensor}
     
     if isinstance(timestamp_from, int):
         filters["final_timestamp__gt"] = timestamp_from
         
     if isinstance(timestamp_to, int):
         filters["initial_timestamp__lt"] = timestamp_to
+        
     
-    
-    imufiles = record.imufile_set.filter(**filters).order_by("initial_timestamp")
+    if metric == "tremor":
+        file_set  = record.tremor_file_set
+        read_file = imu.rtremor
+        files_dir = settings.TREMOR_FILES_DIR
+        
+    elif metric == "raw":
+        file_set  = record.imufile_set
+        read_file = imu.rimu
+        files_dir = settings.IMUFILES_DIR
+        
+    # TODO: Handle properly this exception
+    else:
+        return
+
+    files = file_set.filter(**filters).order_by("initial_timestamp")
+
+    if files.count() == 0:
+        return None
     
     # Define time span to assign a number of samples to each file:
-    
     if timestamp_from is None:
-        timestamp_from = min(imufile.initial_timestamp for imufile in imufiles)
+        timestamp_from = min(file.initial_timestamp for file in files)
         
     if timestamp_to is None:
-        timestamp_to = max(imufile.final_timestamp for imufile in imufiles)
+        timestamp_to = max(file.final_timestamp for file in files)
     
     time_span = timestamp_to - timestamp_from
 
-    for imufile in imufiles:
+    for file in files:
         
         # The number of samples that will be read from the current file will be propotional to the
-        # time span of this imufile with respect to the total time span that will be read.
+        # time span of this file with respect to the total time span that will be read.
         
-        file_initial_timestamp = max(timestamp_from, imufile.initial_timestamp)
-        file_final_timestamp   = min(timestamp_to, imufile.final_timestamp)
+        file_initial_timestamp = max(timestamp_from, file.initial_timestamp)
+        file_final_timestamp   = min(timestamp_to, file.final_timestamp)
         file_time_range        = file_final_timestamp - file_initial_timestamp
         file_n_samples         = math.ceil(n_samples*((file_time_range) / time_span))
         
-        imufile_path = os.path.join(settings.IMUFILES_DIR, imufile.name)
+        filepath = os.path.join(files_dir, file.name)
         
-        data, delta_t, initial_timestamp, columns, step = imu.rimu(imufile_path, timestamp_from = timestamp_from, timestamp_to = timestamp_to, n_samples = file_n_samples)
+        data, header, step = read_file(filepath, timestamp_from = timestamp_from, timestamp_to = timestamp_to, n_samples = file_n_samples)
         
         file_data = []
         for index, item in enumerate(data):
-            line_data = {colname: item[colindex] for colindex, colname in enumerate(columns)}
-            line_data["timestamp"] = initial_timestamp + (step*delta_t*index)
-            line_data["sensor"]    = imufile.sensor
+            line_data = {colname: item[colindex] for colindex, colname in enumerate(header["columns"].split(','))}
+            line_data["timestamp"] = file_initial_timestamp + (step*header["delta_t"]*index)
             
             file_data += [line_data]
     
         output_data += [file_data]
         
-    return output_data
-    
+    return output_data, [{"initial_timestamp": file.initial_timestamp, "final_timestamp": file.final_timestamp} for file in files], step
+
 def get_ambulatory_record_trial_data(record, task_id, trial):
 
     datafile_ids = record.datafile_task_rel_set.filter(task_id=task_id, trial=trial).values_list("datafile", flat=True)

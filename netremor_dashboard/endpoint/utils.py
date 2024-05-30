@@ -14,7 +14,7 @@ from csvsort import csvsort
 import imu
 
 # DJANGO FRAMEWORK
-from endpoint.models import Subject, Task, Record, Datafile, Imufile, Datafile_task_rel
+from endpoint.models import Subject, Task, Record, Datafile, Imufile, Tremor_file, Datafile_task_rel
 from django.conf import settings
 from django.db.models import Min, Max
 from django.views.decorators.csrf import csrf_exempt
@@ -94,6 +94,24 @@ def save_imufile(imu_filepath, datafile = None, record = None):
     
     Imufile(**imufile_args).save()
     
+def save_tremor_file(tremor_filepath, datafile = None, record = None):
+    initial_timestamp, final_timestamp = imu.rtremor(tremor_filepath, only_timestamp_range=True)
+    
+    tremor_file_args = {
+        "name": os.path.basename(tremor_filepath),
+        "initial_timestamp": initial_timestamp,
+        "final_timestamp": final_timestamp,
+    }
+    
+    if isinstance(datafile, Datafile):
+        tremor_file_args["datafile"] = datafile
+        tremor_file_args["sensor"] = datafile.sensor
+        
+    if isinstance(record, Record):
+        tremor_file_args["record"] = record
+        
+    Tremor_file(**tremor_file_args).save()
+    
 def get_model_field_choices_keys(choices):
     """
     Get the keys of the choices of a Model class from Django.
@@ -111,6 +129,7 @@ def process_record_datafiles(record):
     """
     1. Sort record datafiles.
     2. Format data to IMU file type.
+    3. Compute tremor on IMU files.
 
     Args:
         record (Record): Record whose files are going to be parsed to IMU format.
@@ -121,33 +140,65 @@ def process_record_datafiles(record):
     # 1. Sort record datafiles (by default the sort key is the "timestamp").
     # multiprocessing.Pool can't be used for this sorting process because the
     # process uses the multiprocessig itself and would raise an error
-    # [sort_csv_file(datafile) for datafile in datafiles]
     
+    [sort_csv_file(datafile) for datafile in datafiles]
     
-    # 2. Format data to IMU file type.
-    pool = multiprocessing.Pool(processes=datafiles.count())
+    with multiprocessing.Pool() as pool:
     
-    csv_filepaths = tuple(map(lambda datafile: os.path.join(settings.DATAFILES_DIR, datafile.name), datafiles))
-    imu_filepaths = tuple(map(lambda datafile: os.path.join(settings.IMUFILES_DIR, re.sub(r'\.csv$', ".imu", datafile.name)), datafiles))
-    wimu_args     = tuple(map(lambda datafile: (datafile.delta_t, datafile.timestamp_threshold, datafile.timestamp_colname, datafile.separator), datafiles))
-    wimu_args     = tuple(map(lambda filepaths, args: filepaths + args, zip(csv_filepaths, imu_filepaths), wimu_args))
-    
-    imu_filepaths = pool.starmap(imu.wimu, wimu_args)
+        # 2. Format data to IMU file type.        
+        csv_filepaths = tuple(os.path.join(settings.DATAFILES_DIR, datafile.name) for datafile in datafiles)
+        imu_filepaths = tuple(os.path.join(settings.IMUFILES_DIR, re.sub(r'\.csv$', ".imu", datafile.name)) for datafile in datafiles)
+        wimu_args     = tuple((datafile.delta_t, datafile.timestamp_threshold, datafile.timestamp_colname, datafile.separator) for datafile in datafiles)
+        wimu_args     = tuple(map(lambda filepaths, args: filepaths + args, zip(csv_filepaths, imu_filepaths), wimu_args))
+        
+        imu_filepaths = pool.starmap(imu.wimu, wimu_args)
+        
+        # Save IMU file instances in database:
+        for datafile, imufiles in zip(datafiles, imu_filepaths):
+            
+            # Save IMU files in the database.
+            [save_imufile(imufile, datafile, record) for imufile in imufiles]
+            
+            # Update null values of the datafile in the database.
+            initial_timestamp, final_timestamp = datafile.imufile_set.aggregate(Min("initial_timestamp"), Max("final_timestamp")).values()
+            datafile.initial_timestamp         = initial_timestamp
+            datafile.final_timestamp           = final_timestamp
+            datafile.save()
+           
+        imufiles           = record.imufile_set.all()
+        tremor_filepaths   = tuple(os.path.join(settings.TREMOR_FILES_DIR, re.sub(r'\.imu$', '.tr', imufile.name)) for imufile in imufiles)
+        tremor_files_count = imufiles.count()
+        
+        # Compute tremor for each imufile and save computation in a "tremor" file
+        tremor_filepaths = pool.starmap(
+            imu.wtremor,
+            zip(
+                tuple(os.path.join(settings.IMUFILES_DIR, imufile.name) for imufile in imufiles),
+                tremor_filepaths,
+                (settings.DEFAULT_TREMOR_LOW_PASS_FREQ,)*tremor_files_count,
+                (settings.DEFAULT_TREMOR_HIGH_PASS_FREQ,)*tremor_files_count,
+                (settings.DEFAULT_TREMOR_HOP_SECONDS,)*tremor_files_count,
+                (settings.DEFAULT_TREMOR_WINDOW_SECONDS,)*tremor_files_count,
+            )
+        )
+        
+        imufiles = [imufile for imufile, tremor_filepath in zip(imufiles, tremor_filepaths) if tremor_filepath is not None]
+        tremor_filepaths = [tremor_filepath for tremor_filepath in tremor_filepaths if tremor_filepath is not None]
+        
+        # Once tremor is computed, save tremor files in database
+        pool.starmap(
+            save_tremor_file,
+            zip(
+                tremor_filepaths,
+                tuple(imufile.datafile for imufile in imufiles),
+                (record,)*tremor_files_count
+            )
+        )
 
-    for datafile, imufiles in zip(datafiles, imu_filepaths):
         
-        # Save IMU files in the database.
-        [save_imufile(imufile, datafile, record) for imufile in imufiles]
-        
-        # Update null values of the datafile in the database.
-        initial_timestamp, final_timestamp = datafile.imufile_set.aggregate(Min("initial_timestamp"), Max("final_timestamp")).values()
-        datafile.is_processed              = True
-        datafile.initial_timestamp         = initial_timestamp
-        datafile.final_timestamp           = final_timestamp
+    for datafile in datafiles:
+        datafile.is_processed = True
         datafile.save()
-
-    # Compute tremor files from imufiles
-    # [write_tremor_file(imufile) record.imufile_set.all()]
     
     
 def bandpass_filter(data, low_pass_frequency, high_pass_frequency, sampling_frequency):
@@ -156,49 +207,6 @@ def bandpass_filter(data, low_pass_frequency, high_pass_frequency, sampling_freq
     b, a = signal.butter(N=4, Wn=[low_pass_frequency, high_pass_frequency], btype="bandpass", fs=sampling_frequency)
 
     return signal.filtfilt(b, a, data)
-
-def write_tremor_file(imufile):
-    # 1. Read imu file
-    # 2. Rearrange output tuple to get all the axis values in the same tuple
-    # 3. Compute parallelwise each axis tremor values
-    
-    LOW_PASS_FREQ  = 2 # Herz
-    HIGH_PASS_FREQ = 10 # Herz
-    
-    delta_t = imufile.datafile.delta_t
-    
-    if not delta_t:
-        delta_t = settings.DEFAULT_DELTA_T
-    
-    sampling_frequency = 1/delta_t
-    
-    
-    imu_filepath = os.path.join(settings.IMUFILES_DIR, imufile.name)
-    
-    data = tuple(zip(*imu.rimu(imu_filepath)))
-    
-    n_axis = len(data)
-    bandpass_filter_args = (LOW_PASS_FREQ, HIGH_PASS_FREQ, sampling_frequency)
-    
-    with multiprocessing.Pool(processes=len(data)) as pool:
-        data = pool.starmap(bandpass_filter, [(axis_data, *bandpass_filter_args) for axis_data in data])
-    
-    axis_data = bandpass_filter(axis_data, LOW_PASS_FREQ, HIGH_PASS_FREQ, sampling_frequency)
-    hop_seconds = 1
-    hop_samples = int(hop_seconds * sampling_frequency)
-    
-    window_seconds = 3
-    window_size = int(3*sampling_frequency)
-    oversampling_factor = 16
-    
-    mfft = 2**math.ceil(math.log(oversampling_factor * sampling_frequency, 2))
-    
-    gaussian_window = signal.windows.gaussian(window_size, std=12, sym=True)
-    
-    SFT = signal.ShortTimeFFT(gaussian_window, hop=hop_samples, fs=sampling_frequency, mfft=mfft, scale_to="psd")
-    axis_data = 10*np.log10(np.fmax(SFT.spectrogram(axis_data), 1e-4))
-    
-    
     
 def sort_csv_file(datafile, key = "timestamp", separator = ","):
     """
@@ -209,7 +217,7 @@ def sort_csv_file(datafile, key = "timestamp", separator = ","):
         key (string): column which will be used to sort the file.
         separator (string): string used in the CSV file to define the columns (default is ",").
     """
-
+    
     # Define the actual path of the datafile:
     datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
 

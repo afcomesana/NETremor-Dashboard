@@ -82,30 +82,5 @@ metricOptions.forEach(outerOption => {
 });
 
 axisFilters.forEach(axisButton => {
-
-    const axis = axisButton.id.split("-")[1]
-
-    axisButton.addEventListener("click", async () => {
-        const axisLine = document.querySelector(`.line.${axis}`);
-
-        if ( axisButton.classList.contains("selected") ) {
-            axisButton.classList.remove("selected");
-            axisLine?.classList.add("opacity-0");
-        } else {
-            axisButton.classList.add("selected");
-            axisLine?.classList.remove("opacity-0");
-        }
-
-        plotter.updateLegend();
-        // await plotter.loadData();
-        // plotter.renderChart();
-    });
-});
-
-
-if ( RECORD_TYPE == "continuous" ) {
-    (async function() {
-        await plotter.loadData();
-        plotter.renderChart();
-    })()
-}
+    axisButton.addEventListener("click", plotter.updatePlotAxis)
+})

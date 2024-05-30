@@ -10,19 +10,20 @@ from .constants import LOGIN_FORM_FIELDS
 from django.contrib.auth import logout
 
 from utils import get_random_string
-from .utils import send_verification_email, get_record_tasks, get_continuous_record_csv_data, get_continuous_record_imu_data
+from .utils import send_verification_email, get_record_tasks, get_continuous_record_data
 import os
-import csv
 import json
 import zipfile
+import numpy as np
 from pytz import timezone
-import time
+from datetime import datetime
 
 
 @login_required
 def index(request):
     
-    subjects_list = Subject.objects.all()
+    subject_ids = set(datafile.record.subject.id for datafile in Datafile.objects.filter(is_processed=True))    
+    subjects_list = Subject.objects.filter(id__in=subject_ids)
     
     # template = loader.get_template("dashboard/index.html")
     context = {
@@ -73,7 +74,7 @@ def login(request):
                 missing_fields += [field_name]
             
         # Provide form_fields in case it is necessary to fill the form fields again
-        context["form_fields"]    = form_fields
+        context["form_fields"] = form_fields
         
         
         if len(missing_fields) > 0:
@@ -293,17 +294,43 @@ def record(request, record_id):
                 timestamp_from = timestamp_to = None
                 
             else:
-                time_range = [int(item)*1000 for item in time_range]
+                time_range = [int(item) for item in time_range]
                 timestamp_from, timestamp_to = time_range
             
-            # Compare performance reading:
+            try:
+                data, limits, step = get_continuous_record_data(record, sensor, metric, samples, timestamp_from, timestamp_to)
+                
+                filter_size = 30
+                
+                data_keys = list(filter(lambda key: key != "timestamp", data[0][0].keys()))
+                
+                for chunk in data:
+                
+                    chunk_length = len(chunk)
+                    
+                    for index in range(chunk_length):
+                        
+                        from_index = max(0, index - filter_size)
+                        to_index   = min(index + filter_size, chunk_length)
+                        
+                        mean_set  = chunk[from_index:to_index]
+                        mean_item = {"timestamp": chunk[index]["timestamp"]}
+                        for key in data_keys:
+                            mean_item[key] = np.mean([item[key] for item in mean_set])
+                            
+                        chunk[index] = mean_item
+                            
+            except Exception as e:
+                print(e)
+                return HttpResponseServerError("There is still no data in this record.")
             
             # 1) CSV files:
             # response_data = get_continuous_record_csv_data(record, samples, timestamp_from, timestamp_to)
             
             # 2) IMU files:
-            response_data = get_continuous_record_imu_data(record, samples, timestamp_from, timestamp_to)
+            # response_data = get_continuous_record_imu_data(record, samples, timestamp_from, timestamp_to)
             
+            response_data = {"data": data, "limits": limits, "step": step}
             
         elif record.type == "ambulatory":
             params = json.loads(request.body)
@@ -349,8 +376,8 @@ def record(request, record_id):
     elif record.type == "continuous":
         columns  = ["starts_at", "ends_at"]
         callback = lambda item: [
-            item["starts_at"].astimezone(timezone("Europe/Madrid")),
-            item["ends_at"].astimezone(timezone("Europe/Madrid"))
+            datetime.fromtimestamp(item["starts_at"]/1000).astimezone(timezone("Europe/Madrid")),
+            datetime.fromtimestamp(item["ends_at"]/1000).astimezone(timezone("Europe/Madrid"))
         ]
         
     response["tasks"] = get_record_tasks(record, columns, callback)

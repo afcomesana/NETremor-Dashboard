@@ -24,7 +24,13 @@ SENSOR_CHOICES = [
     ("gyroscope", "Gyroscope"),
 ]
 
-DEFAULT_DELTA_T = 30
+# IMU parsing and tremor computation constants:
+DEFAULT_DELTA_T               = 30
+DEFAULT_TREMOR_LOW_PASS_FREQ  = 2
+DEFAULT_TREMOR_HIGH_PASS_FREQ = 10
+DEFAULT_TREMOR_HOP_SECONDS    = 1
+DEFAULT_TREMOR_WINDOW_SECONDS = 3
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/

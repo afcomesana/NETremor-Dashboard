@@ -1,4 +1,17 @@
-import { colorCode, axisTitles } from "./constants.js";
+import {
+    COLOR_CODE,
+    AXIS_TITLES,
+    CHART_GROUP_CONTAINER_ID,
+    RECORD_CHART_CONTAINER_ID,
+    HEIGHT,
+    RECORD_CHART_CONTAINER_SVG_ID,
+    MARGIN,
+    CHART_GROUP_CLIP_ID,
+    X_AXIS_ELEMENT_ID,
+    Y_AXIS_ELEMENT_ID,
+    Y_AXIS_ELEMENT_TITLE_ID,
+    LINE_WIDTH
+} from "./constants.js";
 
 
 export default class Plotter {
@@ -8,36 +21,17 @@ export default class Plotter {
         // -----------------------------------
         // CHART ELEMENT, SIZES AND FEATURES:
         // -----------------------------------
-        this.recordChartContainer  = document.getElementById("record-chart-container");
-        this.chartGroupContainerId = "record-chart-container-group"
-        this.xAxisElementId        = "chart-x-axis";
-        this.yAxisElementId        = "chart-y-axis";
-        this.yAxisElementTitleId   = "y-axis-title";
+        this.recordChartContainer  = document.getElementById(RECORD_CHART_CONTAINER_ID);
         this.axisElements          = Array.from(document.getElementsByClassName("axis-filter"))
         this.axis                  = this.axisElements.map(axis => axis.id.split("-")[1]);
 
-        this.margin = {
-            top: 10,
-            right: 30,
-            bottom: 30,
-            left: 50
-        };
-        this.width  = this.recordChartContainer.clientWidth - this.margin.left - this.margin.right;
-        this.height = 400 - this.margin.top - this.margin.bottom;
-
-        this.lineChunkThreshold = 2000;
-        this.transitionMillis   = 500;
-        this.lineStrokeWidth    = 1.5;
-        this.zoomScale          = 1;
-
-        // --------------------------------
-        // FILTERS AND CHART OPTIONS:
-        // --------------------------------
-        this.trialOption    = null;
+        // --------------------------
+        // CHART FILTERS AND OPTIONS:
+        // --------------------------
         this.selectedSensor = null;
         this.selectedPlot   = null;
         this.selectedMetric = null;
-
+        this.timeRange      = false;
 
         // -------------------------------------------------------
         // AWARENESS OF THE TYPE OF RECORD THAT IS BEING PLOTTED:
@@ -51,27 +45,27 @@ export default class Plotter {
 
         this.IS_AMBULATORY_RECORD = this.RECORD_TYPE == "ambulatory";
         this.IS_CONTINUOUS_RECORD = this.RECORD_TYPE == "continuous";
-    }
 
-    initChart = () => {
 
-        // This will only be called one time during all the DOM lifetime of the chart:
-        if ( document.getElementById(this.chartGroupContainerId) ) {
-            return;
-        }
-
-        // SVG that will contain the chart:
+        // ----------------
+        // INITIALIZE CHART
+        // ----------------
         this.svg = d3.select(this.recordChartContainer)
             .html(null) // Wipe out anything that could be rendered in the chart's area
             .append("svg")
-            .attr("width", this.width + this.margin.left + this.margin.right)
-            .attr("height", this.height + this.margin.top + this.margin.bottom)
-            .attr("id", "record-chart-container-svg");
+            .attr("id", RECORD_CHART_CONTAINER_SVG_ID);
 
+
+        this.zoom = d3.zoom()
+            // TODO: Compute the right maximum scaleExtent for the zoom
+            .on("zoom", this.handleZoom);
+        
+        this.svg.call(this.zoom);
+
+        
         this.chartGroupContainer = this.svg.append("g")
-            .attr("id", this.chartGroupContainerId)
-            .attr("pointer-events", "all")
-            .attr("transform", `translate(${this.margin.left}, ${this.margin.top})`);
+            .attr("id", CHART_GROUP_CONTAINER_ID)
+            .attr("transform", `translate(${MARGIN.left}, ${MARGIN.top})`);
 
         // Clip path:
         this.clip = this.chartGroupContainer.append("defs")
@@ -85,10 +79,8 @@ export default class Plotter {
             // sets what part of an element should be shown. Parts that
             // are inside the region are shown, while those outside are
             // hidden.
-            .attr("id", "clip")
+            .attr("id", CHART_GROUP_CLIP_ID)
                 .append("svg:rect")
-                .attr("width", this.width)
-                .attr("height", this.height)
                 .attr("x", 0)
                 .attr("y", 0);
 
@@ -96,98 +88,221 @@ export default class Plotter {
         // Group that will contain the lines
         this.lineGroup = this.chartGroupContainer.append("g")
             .attr("id", "record-line-group")
-            .attr("pointer-events", "all")
-            .attr("clip-path", "url(#clip)");
+            .attr("clip-path", `url(#${CHART_GROUP_CLIP_ID})`);
+
+        this.resizeChart();
+        // window.addEventListener("resize", this.resizeChart);
+
+    }
+
+    get selectedAxis() {
+        return this.axisElements.filter(el => el.classList.contains("selected")).map(el => el.id.split("-")[1]);
+    }
+
+    selectAxis(axis) {
+        this.axisElements.find(el => el.id == `axis-${axis}`).classList.add("selected");
+    }
+
+    resizeChart = async () => {
+
+        this.width = this.recordChartContainer.clientWidth;
+
+        this.svg
+            .attr("width", this.width + MARGIN.left + MARGIN.right)
+            .attr("height", HEIGHT + MARGIN.top + MARGIN.bottom);
+
+        this.clip
+            .attr("width", this.width)
+            .attr("height", HEIGHT);
+
+        this.zoom.translateExtent([
+            [0, 0],
+            [this.width + MARGIN.left + MARGIN.right, HEIGHT + MARGIN.top + MARGIN.bottom]
+        ]);
+
+        await this.loadData();
+        this.renderChart();
+    }
+
+    handleZoom = (event) => {
+
+        clearTimeout(this.zoomTimeout);
+
+        // Rescale X axis:
+        this.zoomedXScale = event.transform.rescaleX(this.xScale);
+        // this.xAxisElement.call(d3.axisBottom(this.zoomedXScale));
+
+        this.zoomTimeout = setTimeout(async () => {
+            this.timeRange = this.zoomedXScale.domain().map(date => new Date(date).getTime());
+            await this.loadData();
+            this.renderChart();
+        }, 150);
+
+        // Redraw present lines:
+        this.renderChart();
+        // const data = this.data.map(item => new Object({"timestamp": item.timestamp, "x": item.x_amplitude, "y": item.y_amplitude, "z": item.z_amplitude}));
+        // this.drawLines(data, newXScale)
+
     }
 
 
-    getCsrfToken = () => {
-        // CSRF token to make the request
-        let csrfToken = document.cookie.split(";").find(cookie => cookie.includes("csrftoken"));
-        if ( !csrfToken ) {
-            // Show error message
-            throw "No csrf token";
-        }
-
-        return csrfToken.split("=")[1];
-    }
 
     getPlotOptions = () => {
-        
+
         // Get selected option, sensor and axis
-        this.trialOption    = document.querySelector(".trial-option.selected");
-        this.selectedSensor = document.querySelector(".sensor-filter.selected");
-        this.selectedMetric = document.querySelector(".metric-option.selected");
-        this.selectedAxis   = Array.from(document.querySelectorAll(".axis-filter.selected"));
+        const selectSensorElement = document.querySelector(".sensor-filter.selected");
+        const selectMetricElement = document.querySelector(".metric-option.selected");
 
-        if ( !this.trialOption && this.IS_AMBULATORY_RECORD ) {
-            console.error("No option selected");
-            return;
+        if ( !selectSensorElement ) {
+            throw "No sensor selected.";
         }
 
-        if ( this.trialOption && this.IS_CONTINUOUS_RECORD ) {
-            this.timeRange = this.trialOption.dataset.range.split("-").map(el => parseInt(el));
+        if ( !selectMetricElement ) {
+            throw "No metric selected.";
         }
 
 
-        if ( !this.selectedSensor ) {
-            console.error("No sensor selected.");
-            return;
-        }
+        const selectedSensor = selectSensorElement.id.split("-")[1];
+        const selectedMetric = selectMetricElement.id.split("-")[1];
 
+        // If trial, sensor or metric is changed with respect to the previous set of options, we must update the overall data:
+        const updateAllTimeData = (!this.selectedSensor || selectedSensor != this.selectedSensor)
+                                || (!this.selectedMetric || selectedMetric != this.selectedMetric);
 
-        if ( !this.selectedMetric ) {
-            console.error("No metric selected.");
-            return;
-        }
+        this.selectedSensor = selectedSensor;
+        this.selectedMetric = selectedMetric;
 
-        this.selectedSensor = this.selectedSensor.id.split("-")[1];
-        this.selectedMetric = this.selectedMetric.id.split("-")[1];
-        this.selectedAxis   = this.selectedAxis.map(axis => axis.id.split("-")[1]);
+        return updateAllTimeData;
+    }
+    
+    parseTremorToStandarFormat = data => {
+
+        const amplitudes = frequencies = [];
+
+        data.forEach(item => {
+            amplitudes.push(new Object({
+                "timestamp": item.timestamp,
+                "x": item.x_amplitude,
+                "y": item.y_amplitude,
+                "z": item.z_amplitude
+            }));
+
+            frequencies.push(new Object({
+                "timestamp": item.timestamp,
+                "x": item.x_frequency,
+                "y": item.y_frequency,
+                "z": item.z_frequency
+            }));
+        });
+
+        return {amplitudes, frequencies}
     }
 
     loadData = async () => {
-        this.getPlotOptions();
 
-        if ( this.RECORD_TYPE == "ambulatory" ) {
+        const updateAllTimeData = this.getPlotOptions();
 
-            let { trial, id: taskId } = this.trialOption.dataset;
+        this.showSpinner(`#${RECORD_CHART_CONTAINER_ID}`);
 
-            if ([this.selectedMetric, taskId, trial].join("-") != this.selectedPlot) {
-    
-                // Update selected plot option
-                this.selectedPlot = [this.selectedMetric, trial].join("-");
+        // if (updateAllTimeData) {
+        //     var { data, limits, step } = await this.fetchData({
+        //         sensor: this.selectedSensor,
+        //         metric: this.selectedMetric,
+        //         samples: this.width,
+        //         timeRange: false
+        //     });
 
-                this.data = await this.fetchData({
-                    metric: this.selectedMetric,
-                    trial,
-                    taskId
-                });
-            }
+        //     // Parse data to have the simple named axis
+        //     if ( this.selectedMetric == "tremor" ) {
+        //         data = this.parseTremorToStandarFormat(data).amplitudes;
+        //     }
 
-        } else if ( this.RECORD_TYPE == "continuous" ) {
+        //     this.allTimeData = data;
+        // }
 
-            if ( !this.timeRange ) {
-                this.timeRange = false;
-            }
+        const { data, limits, step } = await this.fetchData({
+            sensor: this.selectedSensor,
+            metric: this.selectedMetric,
+            samples: this.width,
+            timeRange: this.timeRange
+        });
 
-            const selectedPlot = [this.selectedMetric, this.selectedSensor, this.timeRange].join("-");
-            if ( selectedPlot != this.selectedPlot ) {
+        this.data   = data;
 
-                this.selectedPlot = selectedPlot;
+        // Parse data to have the simple named axis
+        if ( this.selectedMetric == "tremor" ) {
+            this.frequencies = this.data.map(chunk => chunk.map(item => new Object({"timestamp": item.timestamp, "x": item.x_frequency, "y": item.y_frequency, "z": item.z_frequency})));
+            this.data = this.data.map(chunk => chunk.map(item => new Object({"timestamp": item.timestamp, "x": item.x_amplitude, "y": item.y_amplitude, "z": item.z_amplitude})));
+        }
 
-                this.data = await this.fetchData({
+        // First time that this sensor data is loaded:
+        if ( updateAllTimeData ) {
+            
+            if ( this.timeRange ) {
+
+                let { data: allTimeData, limits: allTimeLimits, step: allTimeStep } = await this.fetchData({
                     sensor: this.selectedSensor,
                     metric: this.selectedMetric,
                     samples: this.width,
-                    timeRange: this.timeRange
+                    timeRange: false
                 });
+                
+                if (this.selectedMetric == "tremor") {
+                    allTimeData = allTimeData.map(chunk => chunk.map(item => new Object({"timestamp": item.timestamp, "x": item.x_amplitude, "y": item.y_amplitude, "z": item.z_amplitude})));
+                }
+
+                this.allTimeData = allTimeData;
+                this.limits = allTimeLimits;
+                this.zoom.scaleExtent([1,allTimeStep]);
+
+            } else {
+                this.allTimeData   = this.data;
+                this.limits        = limits;
+                this.zoom.scaleExtent([1,step]);
             }
+
+            this.selectAxis("x");
+
+        // There is already data loaded (zoom):
+        } else {
+
+            const firstDataTimestamp = this.data.flat()[0].timestamp,
+                lastDataTimestamp    = this.data.flat().slice(-1)[0].timestamp,
+                allTimeDataChunk     = this.allTimeData.flat().filter(item => item.timestamp < firstDataTimestamp || item.timestamp > lastDataTimestamp);
+
+
+            const sortedData = this.data.concat(allTimeDataChunk).flat().sort((a, b) => a.timestamp - b.timestamp);
+            this.data        = [];
+            let dataIndex    = 0,
+                dataItem     = sortedData[dataIndex];
+
+            this.limits.forEach(limit => {
+
+                if (!dataItem) return;
+
+                const currentChunk = [];
+
+                while( dataItem && dataItem.timestamp <= limit.final_timestamp ) {
+
+                    const lastItem = currentChunk.slice(-1)[0];
+
+                    if (!lastItem || dataItem.timestamp != lastItem.timestamp) {
+                        currentChunk.push(dataItem);
+                    }
+
+                    dataItem = sortedData[++dataIndex];
+                }
+
+                if (currentChunk.length) {
+                    // Apply mean
+                    this.data.push(currentChunk);
+                }
+            });
+
         }
-        this.sensorData = this.data.filter(sample => sample.sensor == this.selectedSensor);
 
+        this.hideSpinner();
     }
-
 
     fetchData = async params => {
 
@@ -197,7 +312,6 @@ export default class Plotter {
 
         try {
 
-            this.showSpinner(`#${this.recordChartContainer.id}`);
 
             // TODO: Take into account the width of the chart container:
             const response = await fetch(window.location.pathname, {
@@ -208,185 +322,72 @@ export default class Plotter {
 
             if ( !response.ok ) {
                 console.error(`Error fetching data: ${await response.text()}`);
-                this.hideSpinner()
                 return;
             }
 
             data = await response.json();
-            data = data.flat();
-
-            console.log(data);
-            this.hideSpinner()
 
         } catch(error) {
             data = null;
-            throw(`Could not load data to plot the chart.\n${error}`)
+            console.error(`Error fetching data: ${error}`);
+            this.renderErrorMessage(`Could not load data to plot the chart.`)
+
         }
 
         return data;
     }
 
-    renderChart = async () => {
-
-        if ( !this.sensorData ) {
-            this.recordChartContainer.innerHTML = "No hay datos.";
+    renderChart = () => {
+        if ( !this.data ) {
+            this.renderErrorMessage("There is no data.");
             return
         }
 
-        // If there is something to plot, initialize the chart.
-        this.initChart();
-
-        switch(this.selectedMetric) {
-
-            case("spectrogram"):
-                console.log("plotting spectrogram")
-                this.plotSpectrogram();
-                break;
-
-            default:
-                console.log("plotting raw data")
-                this.plotRawData();
-                break;
-        }
-
+        this.plot(AXIS_TITLES[this.selectedMetric][this.selectedSensor]);
     }
 
-    plotRawData = () => {
+    setXAxis = () => {
 
-        // Show colors of the lines
-        this.updateLegend();
-
-        // X-Axis
+        // Axis scale (function to parse values to positions in axis):
         this.xScale = d3.scaleTime()
-            .domain(d3.extent(this.sensorData, item => new Date(item.timestamp)))
+            .domain(d3.extent(this.data.flat(), item => new Date(item.timestamp)))
             .range([0, this.width]);
 
-        this.xAxis = d3.axisBottom(this.xScale).tickFormat(d3.timeFormat("%H:%M:%S"))
+        document.getElementById(X_AXIS_ELEMENT_ID)?.remove()
 
-        document.getElementById(this.xAxisElementId)?.remove()
         this.xAxisElement  = this.chartGroupContainer.append("g")
-            .attr("id", this.xAxisElementId)
-            .attr("transform", `translate(0, ${this.height})`)
-            .call(this.xAxis);
-        
-        
-        this.xAxisElementWidth   = this.xAxisElement.node().getBoundingClientRect().width;
-        this.xAxisElementOffsetX = this.xAxisElement.node().getBoundingClientRect().x;
+            .attr("id", X_AXIS_ELEMENT_ID)
+            .attr("transform", `translate(0, ${HEIGHT})`)
+            .call(d3.axisBottom(this.zoomedXScale || this.xScale));
+    }
 
-        // Y-Axis
+    setYAxis = (domain, yAxisTitle) => {
+
+        const chartVerticalMargin = 20;
+
         this.yScale = d3.scaleLinear()
-            .domain(this.getRawDataDomain())
-            .range([this.height, 0]);
+            .domain(domain)
+            .range([HEIGHT- chartVerticalMargin, chartVerticalMargin]);
 
-        this.yAxis = d3.axisLeft(this.yScale);
+        document.getElementById(Y_AXIS_ELEMENT_ID)?.remove();
 
-        document.getElementById(this.yAxisElementId)?.remove();
         this.yAxisElement = this.chartGroupContainer.append("g")
-            .attr("id", this.yAxisElementId)
-            .call(this.yAxis);
+            .attr("id", Y_AXIS_ELEMENT_ID)
+            .call(d3.axisLeft(this.yScale));
 
-        
-        document.getElementById(this.yAxisElementTitleId)?.remove();
+        document.getElementById(Y_AXIS_ELEMENT_TITLE_ID)?.remove();
+
         this.chartGroupContainer.append("text")
-            .attr("id", this.yAxisElementTitleId)
-            .attr("transform", `translate(-30, ${Math.floor(this.height/2)}) rotate(-90) `)
-            .html(axisTitles[this.selectedSensor]);
-
-        // Plot:
-        const linesToFlush = Array.from(this.recordChartContainer.getElementsByClassName("line"));
-        linesToFlush.forEach(line => line.remove());
-        this.axis.forEach(axis => {
-            this.drawLine(this.selectedSensor, axis, this.sensorData);
-        });
+            .attr("id", Y_AXIS_ELEMENT_TITLE_ID)
+            .attr("transform", `translate(-30, ${Math.floor(HEIGHT/2)}) rotate(-90) `)
+            .html(yAxisTitle);
     }
 
-    plotSpectrogram = () => {
-        // X-Axis
-        this.xScale = d3.scaleBand()
-            .domain([...Array(this.sensorData.length).keys()])
-            .range([0, this.width]);
+    plot = axisTitle => {
+        this.setXAxis();
+        this.setYAxis(this.getDataDomain(), axisTitle);
 
-       this.xAxis = d3.axisBottom(this.xScale);
-
-
-       document.getElementById(this.xAxisElementId)?.remove()
-       this.xAxisElement  = this.chartGroupContainer.append("g")
-           .attr("id", this.xAxisElementId)
-           .attr("transform", `translate(0, ${this.height})`)
-           .call(this.xAxis);
-       
-       
-       this.xAxisElementWidth   = this.xAxisElement.node().getBoundingClientRect().width;
-       this.xAxisElementOffsetX = this.xAxisElement.node().getBoundingClientRect().x;
-
-       // Y-Axis
-       this.yScale = d3.scaleBand()
-           .domain([...Array(this.sensorData[0].psd.length).keys()])
-           .range([this.height, 0]);
-
-       this.yAxis = d3.axisLeft(this.yScale);
-
-       document.getElementById(this.yAxisElementId)?.remove();
-       this.yAxisElement = this.chartGroupContainer.append("g")
-           .attr("id", this.yAxisElementId)
-           .call(this.yAxis);
-
-        var myColor = d3.scaleSequential()
-           .interpolator(d3.interpolateInferno)
-           .domain(this.getSpectrogramDataDomain())       
-
-       document.getElementById(this.yAxisElementTitleId)?.remove();
-       this.chartGroupContainer.append("text")
-           .attr("id", this.yAxisElementTitleId)
-           .attr("transform", `translate(-30, ${Math.floor(this.height/2)}) rotate(-90) `)
-           .html(axisTitles[this.selectedSensor]);
-
-        this.lineGroup.html("");
-
-        this.sensorData.forEach(({psd}, xIndex) => {
-            psd.forEach((freq, yIndex) => {
-                this.lineGroup.append("rect")
-                    .attr("x", this.xScale(xIndex))
-                    .attr("y", this.yScale(yIndex))
-                    .attr("width", this.xScale.bandwidth())
-                    .attr("height", this.yScale.bandwidth())
-                    .style("fill", myColor(freq))
-            });
-        });
-
-    }
-
-
-    updateLegend = () => {
-        this.getPlotOptions();
-
-        if ( !this.selectedSensor ) {
-            console.error("There is no sensor selected.");
-            return;
-        }
-
-        if ( !this.axis ) {
-            console.error("There are no axis selected.");
-            return;
-        }
-
-        if ( !this.axisElements ) {
-            console.error("There are no axis elements in DOM.");
-            return;
-        }
-
-        
-        this.axisElements.forEach(axisElement => {
-            const axis = axisElement.id.split("-")[1]
-
-            if ( this.selectedAxis.includes(axis) ) {
-                axisElement.style.background = colorCode[`${this.selectedSensor}-${axis}`];
-                axisElement.style.color = "white";
-            } else {
-                axisElement.style.background = "none";
-                axisElement.style.color = "black";
-            }
-        });
+        this.drawLines();
     }
 
     /**
@@ -395,8 +396,8 @@ export default class Plotter {
      * @returns {Array} being the first element the minimum value along all the axis and the
      * second element the maximum value along all the axis
      */
-    getRawDataDomain = () => {
-        let domain = this.axis.map(axis => d3.extent(this.sensorData, d => d[axis]))
+    getDataDomain = () => {
+        let domain = this.axis.map(axis => d3.extent(this.data.flat(), d => d[axis]))
 
         return [
             Math.min(...domain.map(axisDomain => axisDomain[0])), // minimum of all axis
@@ -404,64 +405,32 @@ export default class Plotter {
         ]
     }
 
-    getSpectrogramDataDomain = () => {
-        let domain = this.sensorData.map(item => d3.extent(item.psd))
+    drawLines = () => {
 
-        return [
-            Math.min(...domain.map(axisDomain => axisDomain[0])), // minimum of all axis
-            Math.max(...domain.map(axisDomain => axisDomain[1])), // maximum of all axis
-        ]
-    }
+        const xScale = this.zoomedXScale || this.xScale;
 
-    drawLine = (sensor, axis, data) => {
+        // Remove any lines that may be currently plotted:
+        Array.from(this.recordChartContainer.getElementsByClassName("line")).forEach(line => line.remove());
 
-        // let chunks = [],
-        //     lastChunkIndex = 0
+        this.axis.forEach(axis => {
 
-        // data.forEach((item, index) => {
-        //     if ( !!index && item.timestamp - data[index - 1].timestamp > this.lineChunkThreshold) {
-        //         chunks.push(data.slice(lastChunkIndex, index - 1))
-        //         lastChunkIndex = index
-        //     }
-        // });
-    
-        // data = chunks        
-        // delete window.chunks
+            this.data.forEach((chunk, index) => {
 
-        // data.forEach((chunk, index) => {
-        //     const lineId = `${sensor}-${axis}-${index}-line`;
-    
-        //     // If the line wasn't already drawn, 
-        //     if (!document.getElementById(lineId)) {
-        //         this.lineGroup.append("path")
-        //             .datum(chunk)
-        //             .attr("id", lineId)
-        //             .attr("class", `line ${sensor} ${axis}`)
-        //             .attr("fill", "none")
-        //             .attr("stroke", "steelblue")
-        //             .attr("stroke-width", 1.5)
-        //             .attr("d", d3.line()
-        //                 .x(d => this.xScale(d.timestamp))
-        //                 .y(d => this.yScale(d[axis]))
-        //             )
-        //     }
-        // })
+                const lineId = `${this.selectedSensor}-${axis}-line-${index}`;
 
-        const lineId = `${sensor}-${axis}-line`;
-        
-        // If the line wasn't already drawn, 
-        document.getElementById(lineId)?.remove();
-        this.lineGroup.append("path")
-            .datum(data)
-            .attr("id", lineId)
-            .attr("class", `line ${sensor} ${axis} ${this.selectedAxis.includes(axis) ? "" : "opacity-0"}`)
-            .attr("fill", "none")
-            .attr("stroke", colorCode[`${sensor}-${axis}`])
-            .attr("stroke-width", this.lineStrokeWidth)
-            .attr("d", d3.line()
-                .x(d => this.xScale(d.timestamp))
-                .y(d => this.yScale(d[axis]))
-            )
+                this.lineGroup.append("path")
+                    .datum(chunk)
+                    .attr("id", lineId)
+                    .attr("class", `line ${this.selectedSensor} ${axis} ${this.selectedAxis.includes(axis) ? "" : "opacity-0"}`)
+                    .attr("fill", "none")
+                    .attr("stroke", COLOR_CODE[`${this.selectedSensor}-${axis}`])
+                    .attr("stroke-width", LINE_WIDTH)
+                    .attr("d", d3.line()
+                        .x(d => xScale(d.timestamp))
+                        .y(d => this.yScale(d[axis]))
+                    )
+            });
+        });
     }
     
     // --------------
@@ -484,4 +453,91 @@ export default class Plotter {
         const container = !!selector ? document.querySelector(selector) : document
         Array.from(container.getElementsByClassName("load-layout")).forEach(spinner => spinner.remove())
     }
+
+    getCsrfToken = () => {
+        // CSRF token to make the request
+        let csrfToken = document.cookie.split(";").find(cookie => cookie.includes("csrftoken"));
+        if ( !csrfToken ) {
+            // Show error message
+            throw "No csrf token";
+        }
+
+        return csrfToken.split("=")[1];
+    }
+
+    renderErrorMessage = (message, icon = null) => {
+        this.recordChartContainer.innerHTML = `
+            <div class="alert alert-danger">${message}</div>
+        `
+    }
+
+    selectAxis = (axisName, select = true) => {
+        const axisButton = this.axisElements.find(el => el.id == `axis-${axisName}`);
+
+        if (select) {
+            axisButton.classList.add("selected")
+        } else {
+            axisButton.classList.remove("selected")
+        }
+
+        axisButton.style.background = select ? COLOR_CODE[`${this.selectedSensor}-${axisName}`] : "none";
+        axisButton.style.color      = select ? "white" : "black";
+    }
+
+    updatePlotAxis = async event => {
+
+        const axisButton = event.target.closest(".axis-filter");
+        const axisName   = axisButton.id.split("-")[1];
+
+        this.selectAxis(axisName, !this.selectedAxis.includes(axisName));
+
+        this.renderChart();
+
+        // const axisLine   = document.querySelector(`.line.${axisName}`);
+
+        // if ( axisButton.classList.contains("selected") ) {
+        //     axisButton.classList.remove("selected");
+        //     axisLine?.classList.add("opacity-0");
+            
+        //     axisButton.style.background = "none";
+        //     axisButton.style.color = "black";
+        // } else {
+        //     axisButton.classList.add("selected");
+        //     axisLine?.classList.remove("opacity-0");
+
+        //     axisButton.style.background = COLOR_CODE[`${this.selectedSensor}-${axisName}`];
+        //     axisButton.style.color = "white";
+        // }
+    }
 }
+
+
+// -----------------------------
+// AMBULATORY RECORD PLOTTER
+// -----------------------------
+/*
+let { trial, id: taskId } = this.trialOption.dataset;
+
+if ([this.selectedMetric, taskId, trial].join("-") != this.selectedPlot) {
+
+    // Update selected plot option
+    this.selectedPlot = [this.selectedMetric, trial].join("-");
+
+    this.data = await this.fetchData({
+        metric: this.selectedMetric,
+        trial,
+        taskId
+    });
+}
+
+const trialOption    = document.querySelector(".trial-option.selected");
+this.trialOption    = null;
+
+
+        // const selectedPlot = [this.selectedMetric, this.selectedSensor, this.timeRange].join("-");
+        // if ( selectedPlot != this.selectedPlot ) {
+
+        // this.selectedPlot = selectedPlot;
+
+
+*/
