@@ -63,7 +63,7 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
     Returns:
         list[str]: containing the file paths of the outputted files
     """
-    
+
     if delta_t < 1 or delta_t > MAX_UNSIGNED_SHORT_INT or not isinstance(delta_t, int):
         raise ValueError("Delta t must be an integer between (between 1 and %s)." % (MAX_UNSIGNED_SHORT_INT))
 
@@ -235,7 +235,6 @@ def rtremor(tremor_filepath, output_filepath = None, timestamp_from = None, time
 def read_custom_formatted_file(formatted_filepath, header_fields, output_filepath = None, timestamp_from = None, timestamp_to = None, step = 1, offset = 0, n_samples = None, only_header = False, only_timestamp_range = False):
     
     formatted_file = open(formatted_filepath, "rb")
-    
     output = []
     if output_filepath is not None:
         output = open(output_filepath, "w")
@@ -340,7 +339,6 @@ def compute_tremor_amplitude(data, low_pass_freq, high_pass_freq, SFT):
         return []
     
     # Parse to dB
-    data = 10*np.log10(np.fmax(data, 1e-4))
     
     max_freq_index = np.argmax(data, axis=0)
     data = [data[row, col] for row, col in zip(max_freq_index, range(data.shape[1]))]

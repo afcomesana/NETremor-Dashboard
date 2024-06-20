@@ -18,6 +18,8 @@ BASE_DIR         = Path(__file__).resolve().parent.parent
 DATAFILES_DIR    = Path.joinpath(BASE_DIR, "data-files")
 IMUFILES_DIR     = Path.joinpath(BASE_DIR, "imu-files")
 TREMOR_FILES_DIR = Path.joinpath(BASE_DIR, "tremor-files")
+LOG_DIR          = Path.joinpath(BASE_DIR, "log")
+
 
 SENSOR_CHOICES = [
     ("accelerometer", "Accelerometer"),
@@ -30,6 +32,12 @@ DEFAULT_TREMOR_LOW_PASS_FREQ  = 2
 DEFAULT_TREMOR_HIGH_PASS_FREQ = 10
 DEFAULT_TREMOR_HOP_SECONDS    = 1
 DEFAULT_TREMOR_WINDOW_SECONDS = 3
+
+# Log levels:
+LOG_INFO  = "INFO"
+LOG_ERROR = "ERROR"
+LOG_DEBUG = "DEBUG"
+LOG_WARN  = "WARN"
 
 
 # Quick-start development settings - unsuitable for production

@@ -128,6 +128,7 @@ export default class Plotter {
 
         clearTimeout(this.zoomTimeout);
 
+
         // Rescale X axis:
         this.zoomedXScale = event.transform.rescaleX(this.xScale);
         // this.xAxisElement.call(d3.axisBottom(this.zoomedXScale));
@@ -175,28 +176,7 @@ export default class Plotter {
         return updateAllTimeData;
     }
     
-    parseTremorToStandarFormat = data => {
-
-        const amplitudes = frequencies = [];
-
-        data.forEach(item => {
-            amplitudes.push(new Object({
-                "timestamp": item.timestamp,
-                "x": item.x_amplitude,
-                "y": item.y_amplitude,
-                "z": item.z_amplitude
-            }));
-
-            frequencies.push(new Object({
-                "timestamp": item.timestamp,
-                "x": item.x_frequency,
-                "y": item.y_frequency,
-                "z": item.z_frequency
-            }));
-        });
-
-        return {amplitudes, frequencies}
-    }
+    parseTremorToStandarFormat = (data, key) => data.map(chunk => chunk.map(item => new Object({"timestamp": item.timestamp, "x": item[`x_${key}`], "y": item[`y_${key}`], "z": item[`z_${key}`]})));
 
     loadData = async () => {
 
@@ -204,40 +184,36 @@ export default class Plotter {
 
         this.showSpinner(`#${RECORD_CHART_CONTAINER_ID}`);
 
-        // if (updateAllTimeData) {
-        //     var { data, limits, step } = await this.fetchData({
-        //         sensor: this.selectedSensor,
-        //         metric: this.selectedMetric,
-        //         samples: this.width,
-        //         timeRange: false
-        //     });
+        let response;
 
-        //     // Parse data to have the simple named axis
-        //     if ( this.selectedMetric == "tremor" ) {
-        //         data = this.parseTremorToStandarFormat(data).amplitudes;
-        //     }
+        try {
+            response = await this.fetchData({
+                sensor: this.selectedSensor,
+                metric: this.selectedMetric,
+                samples: this.width,
+                timeRange: this.timeRange
+            });
+    
+        } catch(error) {
+            console.warn(error);
+        }
 
-        //     this.allTimeData = data;
-        // }
+        if ( !response ) return;
 
-        const { data, limits, step } = await this.fetchData({
-            sensor: this.selectedSensor,
-            metric: this.selectedMetric,
-            samples: this.width,
-            timeRange: this.timeRange
-        });
-
-        this.data   = data;
-
+        const { data, limits, step } = response;
+        
+        this.data = data;
+        
         // Parse data to have the simple named axis
         if ( this.selectedMetric == "tremor" ) {
-            this.frequencies = this.data.map(chunk => chunk.map(item => new Object({"timestamp": item.timestamp, "x": item.x_frequency, "y": item.y_frequency, "z": item.z_frequency})));
-            this.data = this.data.map(chunk => chunk.map(item => new Object({"timestamp": item.timestamp, "x": item.x_amplitude, "y": item.y_amplitude, "z": item.z_amplitude})));
+            this.frequencies = this.parseTremorToStandarFormat(this.data, "frequency");
+            this.data        = this.parseTremorToStandarFormat(this.data, "amplitude");
         }
 
         // First time that this sensor data is loaded:
         if ( updateAllTimeData ) {
-            
+
+            // If we are applying zoom, we need to fetch the data outside of the zoom so that we can pan and zoom out            
             if ( this.timeRange ) {
 
                 let { data: allTimeData, limits: allTimeLimits, step: allTimeStep } = await this.fetchData({
@@ -248,7 +224,7 @@ export default class Plotter {
                 });
                 
                 if (this.selectedMetric == "tremor") {
-                    allTimeData = allTimeData.map(chunk => chunk.map(item => new Object({"timestamp": item.timestamp, "x": item.x_amplitude, "y": item.y_amplitude, "z": item.z_amplitude})));
+                    allTimeData = this.parseTremorToStandarFormat(allTimeData, "amplitude")
                 }
 
                 this.allTimeData = allTimeData;
@@ -261,10 +237,30 @@ export default class Plotter {
                 this.zoom.scaleExtent([1,step]);
             }
 
-            this.selectAxis("x");
+            if (this.allTimeData.length == 0) {
+                this.renderErrorMessage("No data was found.");
+                return;
+            }
+
+            // SELECT THE AXIS THAT HAS THE MOST TREMOR ENERGY
+            if (this.selectedAxis.length == 0) {
+                let axisToSelect,
+                    currentMean = -Infinity,
+                    dataLength = this.data.flat().length;
+
+                this.axis.forEach(axis => {
+                    const axisMean = this.data.flat().reduce((acc, item) => acc + item[axis], 0) / dataLength;
+                    if (axisMean > currentMean) {
+                        axisToSelect = axis;
+                        currentMean = axisMean;
+                    }
+                });
+
+                this.selectAxis(axisToSelect);
+            }
 
         // There is already data loaded (zoom):
-        } else {
+        } else if (this.data.length > 0) {
 
             const firstDataTimestamp = this.data.flat()[0].timestamp,
                 lastDataTimestamp    = this.data.flat().slice(-1)[0].timestamp,
@@ -308,11 +304,7 @@ export default class Plotter {
 
         const CRSF_TOKEN = this.getCsrfToken();
 
-        let data;
-
         try {
-
-
             // TODO: Take into account the width of the chart container:
             const response = await fetch(window.location.pathname, {
                 method: "POST",
@@ -321,26 +313,23 @@ export default class Plotter {
             })
 
             if ( !response.ok ) {
-                console.error(`Error fetching data: ${await response.text()}`);
+                this.renderErrorMessage(`Error fetching data: ${await response.text()}`);
                 return;
             }
 
-            data = await response.json();
+            return await response.json();
 
         } catch(error) {
-            data = null;
             console.error(`Error fetching data: ${error}`);
             this.renderErrorMessage(`Could not load data to plot the chart.`)
-
         }
-
-        return data;
     }
 
     renderChart = () => {
-        if ( !this.data ) {
-            this.renderErrorMessage("There is no data.");
-            return
+
+        if (!this.data || this.data.lenth == 0) {
+            console.warn("No data available.");
+            return;
         }
 
         this.plot(AXIS_TITLES[this.selectedMetric][this.selectedSensor]);
@@ -349,15 +338,17 @@ export default class Plotter {
     setXAxis = () => {
 
         // Axis scale (function to parse values to positions in axis):
-        this.xScale = d3.scaleTime()
-            .domain(d3.extent(this.data.flat(), item => new Date(item.timestamp)))
-            .range([0, this.width]);
+        if (!this.zoomedXScale) {
+            this.xScale = d3.scaleTime()
+                .domain(d3.extent(this.data.flat(), item => new Date(item.timestamp)))
+                .range([0, this.width]);
+        }
 
         document.getElementById(X_AXIS_ELEMENT_ID)?.remove()
 
         this.xAxisElement  = this.chartGroupContainer.append("g")
             .attr("id", X_AXIS_ELEMENT_ID)
-            .attr("transform", `translate(0, ${HEIGHT})`)
+            .attr("transform", `translate(0, ${HEIGHT - MARGIN.bottom + MARGIN.top})`)
             .call(d3.axisBottom(this.zoomedXScale || this.xScale));
     }
 
@@ -385,6 +376,7 @@ export default class Plotter {
 
     plot = axisTitle => {
         this.setXAxis();
+
         this.setYAxis(this.getDataDomain(), axisTitle);
 
         this.drawLines();
@@ -416,19 +408,30 @@ export default class Plotter {
 
             this.data.forEach((chunk, index) => {
 
-                const lineId = `${this.selectedSensor}-${axis}-line-${index}`;
+                const lineId    = `${this.selectedSensor}-${axis}-line-${index}`;
+                const lineClass = `line ${this.selectedSensor} ${axis} ${this.selectedAxis.includes(axis) ? "" : "opacity-0"}`;
 
-                this.lineGroup.append("path")
-                    .datum(chunk)
-                    .attr("id", lineId)
-                    .attr("class", `line ${this.selectedSensor} ${axis} ${this.selectedAxis.includes(axis) ? "" : "opacity-0"}`)
-                    .attr("fill", "none")
-                    .attr("stroke", COLOR_CODE[`${this.selectedSensor}-${axis}`])
-                    .attr("stroke-width", LINE_WIDTH)
-                    .attr("d", d3.line()
-                        .x(d => xScale(d.timestamp))
-                        .y(d => this.yScale(d[axis]))
-                    )
+                if ( chunk.length > 1 ) {
+                    this.lineGroup.append("path")
+                        .datum(chunk)
+                        .attr("id", lineId)
+                        .attr("class", lineClass)
+                        .attr("fill", "none")
+                        .attr("stroke", COLOR_CODE[`${this.selectedSensor}-${axis}`])
+                        .attr("stroke-width", LINE_WIDTH)
+                        .attr("d", d3.line()
+                            .x(d => xScale(d.timestamp))
+                            .y(d => this.yScale(d[axis]))
+                        )
+                } else {
+                    this.lineGroup.append("circle")
+                        .attr("id", lineId)
+                        .attr("class", lineClass)
+                        .attr("cx", xScale(chunk[0].timestamp))
+                        .attr("cy", this.yScale(chunk[0][axis]))
+                        .attr("r", LINE_WIDTH*0.8)
+                        .style("fill", COLOR_CODE[`${this.selectedSensor}-${axis}`])
+                }
             });
         });
     }

@@ -20,5 +20,6 @@ from django.urls import path, include
 urlpatterns = [
     path("", include("dashboard.urls")),
     path("endpoint/", include("endpoint.urls")),
+    path("mailproxy/", include("mailproxy.urls")),
     path('admin/', admin.site.urls),
 ]

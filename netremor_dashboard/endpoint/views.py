@@ -35,7 +35,10 @@ def save_record(request):
     
     if len(request.FILES) == 0:
         return HttpResponseBadRequest("No se han enviado archivos.")
-
+    
+    
+    if sum(1 for _ in filter(lambda filename: not os.path.exists(os.path.join(settings.DATAFILES_DIR, filename)), request.FILES)) == 0:
+        return HttpResponse("Los archivos enviados ya están guardados.")
 
     # Data about the subject and record is expected to be sent in the "body.json" file.
     body_filepath = os.path.join(settings.DATAFILES_DIR, "%s.json" % uuid.uuid1().hex)
@@ -51,10 +54,18 @@ def save_record(request):
         
         # Tasks are saved in its own table to prevent different names and descriptions
         # for the same task ID. Then, tasks in records are retrieved using this table.
-        utils.save_tasks(recorded_tasks)
+        utils.save_tasks_or_positions(recorded_tasks, "task")
         
     except KeyError:
         recorded_tasks = []
+        
+
+    try:
+        recorded_positions = body_data.pop("recorded_positions")
+        utils.save_tasks_or_positions(recorded_positions, "position")
+        
+    except KeyError:
+        recorded_positions = []
 
 
     try:
@@ -82,4 +93,4 @@ def save_record(request):
     record_type = list(filter(lambda item: bool(item.strip()), request.path.split("/")))[-1]
     save_record_callback = getattr(utils, "save_%s_record" % record_type)
 
-    return save_record_callback(request, subject, recorded_tasks, record_added_on, delta_t)
+    return save_record_callback(request, subject, recorded_tasks, recorded_positions, record_added_on, delta_t)

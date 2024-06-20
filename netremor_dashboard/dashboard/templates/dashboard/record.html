@@ -13,131 +13,63 @@
 
     </h3>
 
-    <div class="row">
+    <!-- FILTERS -->
+    <div id="record-filters-container" class="mb-3">
+        <div class="row align-items-end">
 
-        <!-- TASKS SELECTOR -->
-        <div class="col-3">
+            <!-- SENSOR FILTERS -->
+            {% if sensor_choices %}
+                <div class="col-12 col-sm-4">
+                    <div class="h4 mb-3">Sensors</div>
+                    <div class="d-flex flex-wrap">
+                        {% for sensor in sensor_choices %}
+                            <button
+                                class="sensor-filter btn border me-2 p-1 {% if forloop.counter == 1 %}selected btn-primary{% endif %}"
+                                id="sensor-{{ sensor.0 }}">
+                                {{ sensor.1 }}
+                            </button>
 
-            <div id="tasks-container" class="rounded bg-primary-light-subtle p-3">
-
-                {% if tasks %}
-
-                    {% for task in tasks %}
-                        <!-- TASK NAME TO SHOW DIFFERENT OPTIONS -->
-                        <div class="{% if tasks|length != forloop.counter%}mb-3{% endif %}">
-                            <a
-                                class="task-name-container d-flex justify-content-between h5 collapsed"
-                                data-bs-toggle="collapse"
-                                href="#task-{{ forloop.counter }}"
-                                role="button"
-                                aria-expanded="false"
-                                aria-controls="task-{{ forloop.counter }}">
-                                
-                                <b>{{ task.task.name }}</b>
-                                <i class="task-name-collapse-icon fa-solid fa-chevron-down"></i>
-                            </a>
-
-                            <!-- OPTIONS AVAILABLE TO PLOT -->
-                            <div class="task-options-container collapse border-bottom py-2" id="task-{{ forloop.counter }}">
-
-                                {% for trial in task.trials %}
-                                
-                                    <div
-                                        data-id="{{ task.task.id }}"
-                                        data-trial="{{ trial }}"
-                                        data-range="{{trial.0|date:'U'}}-{{trial.1|date:'U'}}"
-                                        class="trial-option d-inline-block badge bg-dark text-white cursor-pointer mb-2">
-
-                                        {% if record.type == "ambulatory" %}
-                                            Trial {{ forloop.counter }}
-
-                                        {% elif record.type == "continuous" %}
-
-                                            From {{ trial.0|date:'d/M H:i:s' }} to {{ trial.1|date:'d/M H:i:s' }}
-
-                                        {% endif %}
-                                    </div>
-
-                                {% endfor %}
-
-                            </div>
-
-                        </div>
-
-                    {% endfor %}
-
-                {% else %}
-
-                    <div class="alert alert-danger">There are no registered tasks for this record.</div>
-
-                {% endif %}
-
-            </div>
-        </div>
-
-        <!-- CHART CONTAINER -->
-            <div class="col-9">
-
-                <!-- FILTERS -->
-                <div id="record-filters-container" class="mb-3">
-                    <div class="row align-items-end">
-
-                        <!-- SENSOR FILTERS -->
-                        {% if sensor_choices %}
-                            <div class="col-12 col-sm-4">
-                                <div class="h4 mb-3">Sensors</div>
-                                <div class="d-flex flex-wrap">
-                                    {% for sensor in sensor_choices %}
-                                        <button
-                                            class="sensor-filter btn border me-2 p-1 {% if forloop.counter == 1 %}selected btn-primary{% endif %}"
-                                            id="sensor-{{ sensor.0 }}">
-                                            {{ sensor.1 }}
-                                        </button>
-
-                                    {% endfor %}
-                                </div>
-                            </div>
-                        {% endif %}
-
-                        <!-- AXIS FILTERS -->
-                        <div class="col-12 col-sm-4">
-                            <div class="h4 mb-3">Axis</div>
-                            {% with axis_choices="x y z" %}
-                                {% for axis in axis_choices.split %}
-                                    <span class="axis-filter btn border cursor-pointer me-2 py-1 px-2" id="axis-{{ axis }}"> {{ axis | title }}</span>
-                                {% endfor %}
-                            {% endwith %}
-                        </div>
-
-                        <!-- METRIC OPTIONS -->
-                        <div class="col-12 col-sm-4">
-                            <div class="h4 mb-3">Metrics</div>
-                            {% with metric_options="tremor raw" %}
-                                {% for metric in metric_options.split %}
-                                    <span
-                                        class="metric-option btn border me-2 p-1 {% if forloop.counter == 1 %}selected btn-primary{% endif %} {% if forloop.counter == 1 %}selected{% endif %}"
-                                        id="metric-{{ metric }}">
-                                        {{ metric | title }}
-                                    </span>
-                                {% endfor %}
-                            {% endwith %}
-                        </div>
-
+                        {% endfor %}
                     </div>
                 </div>
+            {% endif %}
 
-                <!-- CHART -->
-                <div id="record-chart-container" class="d-flex align-items-center justify-content-center position-relative">
+            <!-- AXIS FILTERS -->
+            <div class="col-12 col-sm-4">
+                <div class="h4 mb-3">Axis</div>
+                {% with axis_choices="x y z" %}
+                    {% for axis in axis_choices.split %}
+                        <span class="axis-filter btn border cursor-pointer me-2 py-1 px-2" id="axis-{{ axis }}"> {{ axis | title }}</span>
+                    {% endfor %}
+                {% endwith %}
+            </div>
 
-                    {% if record.type == "ambulatory" %}
-
-                        Select a task.
-
-                    {% endif %}
-
-                </div>
+            <!-- METRIC OPTIONS -->
+            <div class="col-12 col-sm-4">
+                <div class="h4 mb-3">Metrics</div>
+                {% with metric_options="tremor raw" %}
+                    {% for metric in metric_options.split %}
+                        <span
+                            class="metric-option btn border me-2 p-1 {% if forloop.counter == 1 %}selected btn-primary{% endif %} {% if forloop.counter == 1 %}selected{% endif %}"
+                            id="metric-{{ metric }}">
+                            {{ metric | title }}
+                        </span>
+                    {% endfor %}
+                {% endwith %}
+            </div>
 
         </div>
+    </div>
+
+    <!-- CHART -->
+    <div id="record-chart-container" class="d-flex align-items-center justify-content-center position-relative">
+
+        {% if record.type == "ambulatory" %}
+
+            Select a task.
+
+        {% endif %}
+
     </div>
 
 </div>
@@ -152,23 +84,14 @@
         cursor: grab;
     }
 
-    .trial-option, .axis-filter, .sensor-filter {
+    .axis-filter, .sensor-filter {
         transition: all ease .3s;
     }
 
-    .task-name-collapse-icon {
-        transition: all ease .2s;
-        transform: rotate(180deg);
-    }
-
-    .task-name-container.collapsed .task-name-collapse-icon {
-        transform: rotate(0);
-    }
 
     .line {
         transition: opacity ease .2s;
     }
-
 
 </style>
 

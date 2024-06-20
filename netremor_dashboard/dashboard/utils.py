@@ -10,7 +10,7 @@ import multiprocessing
 from scipy import signal
 
 # CUSTOM MODULES
-from utils import get_random_string
+import utils
 import imu
 
 # DJANGO FRAMEWORK
@@ -20,7 +20,7 @@ from django.contrib.auth.models import User
 from django.conf import settings
 from django.db.models import Max, Min
 from dashboard.models import Verification
-from endpoint.models import Task
+from endpoint.models import Task, Position
 from django.urls import reverse
 
 
@@ -149,7 +149,7 @@ def register_user(request, template, context, form_fields):
     user = User.objects.create_user(username, email, password)
     user.save()
     
-    user_verification = Verification(user=user, code=get_random_string(settings.VERIFICATION_CODE_LENGTH))
+    user_verification = Verification(user=user, code=utils.get_random_string(settings.VERIFICATION_CODE_LENGTH))
     user_verification.save()
     send_verification_email(user)
     
@@ -161,11 +161,10 @@ def register_user(request, template, context, form_fields):
     return response
 
 def send_verification_email(user):
-    data = {
-        "email_to": user.email,
-        "email_from": "NETremor <netremor@oriontech.es>",
-        "email_subject": "Verificación de cuenta",
-    }
+    
+    email_to      = user.email
+    email_from    = "NETremor <netremor@oriontech.es>"
+    email_subject = "Verificación de cuenta"
     
     email_message  = "Hola %s,\n\n" % user.username
     email_message += "Te has registrado correctamente en la plataforma de NETremor.\nPara verificar tu cuenta y poder utilizar la plataforma debes acceder a la siguiente dirección:\n\n"
@@ -174,11 +173,11 @@ def send_verification_email(user):
     email_message += "alberto.comesana@csic.es\n\n"
     email_message += "Un saludo."
     
-    data["email_message"] = email_message
-    
-    req = requests.post("https://mailproxy.oriontech.es", json = data)
-    
-    print(req.text)
+    try:
+        utils.send_mail(email_to, email_from, email_subject, email_message)
+        
+    except Exception as e:
+        utils.write_log("Could not send verification email: %s" % repr(e), "dashboard", utils.LOG_ERROR)
  
 #################
 # HANDLE RECORDS   
@@ -338,7 +337,7 @@ def get_continuous_record_data(record, sensor, metric, n_samples, timestamp_from
     files = file_set.filter(**filters).order_by("initial_timestamp")
 
     if files.count() == 0:
-        return None
+        return [], None, None
     
     # Define time span to assign a number of samples to each file:
     if timestamp_from is None:
@@ -348,9 +347,13 @@ def get_continuous_record_data(record, sensor, metric, n_samples, timestamp_from
         timestamp_to = max(file.final_timestamp for file in files)
     
     time_span = timestamp_to - timestamp_from
-
+    time_step = time_span / n_samples
+    
+    
+    
+    max_delta_t = 0
+    
     for file in files:
-        
         # The number of samples that will be read from the current file will be propotional to the
         # time span of this file with respect to the total time span that will be read.
         
@@ -363,16 +366,21 @@ def get_continuous_record_data(record, sensor, metric, n_samples, timestamp_from
         
         data, header, step = read_file(filepath, timestamp_from = timestamp_from, timestamp_to = timestamp_to, n_samples = file_n_samples)
         
+        max_delta_t = max(header["delta_t"], max_delta_t)
+        
         file_data = []
         for index, item in enumerate(data):
             line_data = {colname: item[colindex] for colindex, colname in enumerate(header["columns"].split(','))}
             line_data["timestamp"] = file_initial_timestamp + (step*header["delta_t"]*index)
             
             file_data += [line_data]
-    
+        
         output_data += [file_data]
         
-    return output_data, [{"initial_timestamp": file.initial_timestamp, "final_timestamp": file.final_timestamp} for file in files], step
+    limits = [{"initial_timestamp": file.initial_timestamp, "final_timestamp": file.final_timestamp} for file in files]
+
+    return output_data, limits, time_step/max_delta_t
+
 
 def get_ambulatory_record_trial_data(record, task_id, trial):
 

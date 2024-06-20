@@ -9,7 +9,7 @@ from django.contrib.auth.models import User
 from .constants import LOGIN_FORM_FIELDS
 from django.contrib.auth import logout
 
-from utils import get_random_string
+import utils
 from .utils import send_verification_email, get_record_tasks, get_continuous_record_data
 import os
 import json
@@ -17,7 +17,6 @@ import zipfile
 import numpy as np
 from pytz import timezone
 from datetime import datetime
-
 
 @login_required
 def index(request):
@@ -124,7 +123,7 @@ def verification_form(request):
                 
                 return render(request, "dashboard/verification-form.html", context)
             
-            verification_user.verification.code = get_random_string(settings.VERIFICATION_CODE_LENGTH)
+            verification_user.verification.code = utils.get_random_string(settings.VERIFICATION_CODE_LENGTH)
             verification_user.verification.save()
             
             send_verification_email(verification_user)
@@ -241,42 +240,46 @@ def record(request, record_id):
         zip_file_path = os.path.join(settings.DATAFILES_DIR, zip_filename)
         
         with zipfile.ZipFile(zip_file_path, "w") as temp_zip:
-            for datafile in Datafile.objects.filter(record_id=record_id):
-                filename = datafile.name
-                try:
-                    datafile_task_rel = Datafile_task_rel.objects.get(datafile=datafile)
-                    task_id = datafile_task_rel.task.id.lower()
-                    filename, extension = filename.split(".")
-                    if len(list(filter(lambda item: item.lower() == task_id, filename.split("-")))) == 0:
-                        filename += "-%s" % task_id
+            
+            if record.type == "ambulatory":
+                for datafile in Datafile.objects.filter(record_id=record_id):
+                    filename = datafile.name
+                    try:
+                        datafile_task_rel = Datafile_task_rel.objects.get(datafile=datafile)
+                        task_id = datafile_task_rel.task.id.lower()
+                        filename, extension = filename.split(".")
+                        if len(list(filter(lambda item: item.lower() == task_id, filename.split("-")))) == 0:
+                            filename += "-%s" % task_id
+                            
+                        filename = ".".join([filename, extension])
                         
-                    filename = ".".join([filename, extension])
+                    except Datafile_task_rel.DoesNotExist:
+                        pass
                     
-                except Datafile_task_rel.DoesNotExist:
-                    pass
-                
-                data_file_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
-                temp_zip.write(data_file_path, filename)
-             
+                    data_file_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
+                    temp_zip.write(data_file_path, filename)
+            
                 
             # For continuous records, add a CSV with the information regarding
             # start and finish timestamps for each task in the record
-            if record.type == "continuous":
+            elif record.type == "continuous":
                 
-                record_tasks = record.datafile_task_rel_set.values("task_id", "starts_at", "ends_at").distinct()
-                record_tasks = list(map(lambda task: "%s,%s,%s" % (
-                    task["task_id"],    
-                    int(task["starts_at"].timestamp() * 1000),    
-                    int(task["ends_at"].timestamp() * 1000),
-                ), record_tasks))
-                
-                temp_zip.writestr("%s-tasks.csv" % record.subject.id, "\n".join(record_tasks))
-                            
+                for datafile in Datafile.objects.filter(record=record, is_processed=True):
+                    temp_zip.write(os.path.join(settings.DATAFILES_DIR, datafile.name), datafile.name)
+                    
+                for item_name, record_item_set in zip(["task", "position"], [record.datafile_task_rel_set, record.datafile_position_rel_set]):
+                    item_id_key = "%s_id" % item_name
+                    
+                    items = record_item_set.values(item_id_key, "starts_at", "ends_at").distinct()
+                    items = ["%s,%s,%s" % (item[item_id_key], item["starts_at"], item["ends_at"] if "ends_at" in item.keys() else "null") for item in items]
+                    
+                    temp_zip.writestr("%ss.csv" % item_name, "\n".join(items))
+  
         # Send bytes of zip files as a downloadable and remove the zip file:
         with open(zip_file_path, "rb") as temp_zip:
             
             response = HttpResponse(temp_zip.read(), content_type="application/octet-stream")
-            response.headers["Content-disposition"] = "inline; filename=%s" % zip_filename
+            response.headers["Content-disposition"] = "attachment; filename=%s" % zip_filename
             
             os.remove(zip_file_path)
                 
@@ -289,7 +292,7 @@ def record(request, record_id):
         # 3.b)
         if record.type == "continuous":
             sensor, metric, samples, time_range = json.loads(request.body).values()
-            
+
             if not time_range:
                 timestamp_from = timestamp_to = None
                 
@@ -297,38 +300,40 @@ def record(request, record_id):
                 time_range = [int(item) for item in time_range]
                 timestamp_from, timestamp_to = time_range
             
-            try:
-                data, limits, step = get_continuous_record_data(record, sensor, metric, samples, timestamp_from, timestamp_to)
+            
+            data, limits, step = get_continuous_record_data(record, sensor, metric, samples, timestamp_from, timestamp_to)
+            
+            if len(data) > 0:
                 
-                filter_size = 30
-                
-                data_keys = list(filter(lambda key: key != "timestamp", data[0][0].keys()))
-                
-                for chunk in data:
-                
-                    chunk_length = len(chunk)
+                try:
                     
-                    for index in range(chunk_length):
+                    filter_size = 50
+                    
+                    data_keys = list(filter(lambda key: key != "timestamp", data[0][0].keys()))
+                    
+                    for chunk in data:
+                    
+                        chunk_length = len(chunk)
                         
-                        from_index = max(0, index - filter_size)
-                        to_index   = min(index + filter_size, chunk_length)
+                        if chunk_length <= 1:
+                            continue
                         
-                        mean_set  = chunk[from_index:to_index]
-                        mean_item = {"timestamp": chunk[index]["timestamp"]}
-                        for key in data_keys:
-                            mean_item[key] = np.mean([item[key] for item in mean_set])
+                        for index in range(chunk_length):
                             
-                        chunk[index] = mean_item
+                            from_index = max(0, index - filter_size)
+                            to_index   = min(index + filter_size, chunk_length)
                             
-            except Exception as e:
-                print(e)
-                return HttpResponseServerError("There is still no data in this record.")
-            
-            # 1) CSV files:
-            # response_data = get_continuous_record_csv_data(record, samples, timestamp_from, timestamp_to)
-            
-            # 2) IMU files:
-            # response_data = get_continuous_record_imu_data(record, samples, timestamp_from, timestamp_to)
+                            mean_set  = chunk[from_index:to_index]
+                            mean_item = {"timestamp": chunk[index]["timestamp"]}
+                            for key in data_keys:
+                                mean_item[key] = np.mean([item[key] for item in mean_set])
+                            
+                            chunk[index] = mean_item
+
+                except Exception as e:
+                    utils.write_log(repr(e), "dashboard", settings.LOG_WARN)
+                    print(repr(e))
+                    return HttpResponseServerError("Unexpected server error.")
             
             response_data = {"data": data, "limits": limits, "step": step}
             
@@ -377,7 +382,7 @@ def record(request, record_id):
         columns  = ["starts_at", "ends_at"]
         callback = lambda item: [
             datetime.fromtimestamp(item["starts_at"]/1000).astimezone(timezone("Europe/Madrid")),
-            datetime.fromtimestamp(item["ends_at"]/1000).astimezone(timezone("Europe/Madrid"))
+            datetime.fromtimestamp(item["ends_at"]/1000).astimezone(timezone("Europe/Madrid")) if item["ends_at"] else None
         ]
         
     response["tasks"] = get_record_tasks(record, columns, callback)

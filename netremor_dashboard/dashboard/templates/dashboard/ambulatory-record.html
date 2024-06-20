@@ -1,0 +1,57 @@
+
+<div id="tasks-container" class="rounded bg-primary-light-subtle p-3">
+
+    {% if tasks %}
+
+        {% for task in tasks %}
+            <!-- TASK NAME TO SHOW DIFFERENT OPTIONS -->
+            <div class="{% if tasks|length != forloop.counter%}mb-3{% endif %}">
+                <a
+                    class="task-name-container d-flex justify-content-between h5 collapsed"
+                    data-bs-toggle="collapse"
+                    href="#task-{{ forloop.counter }}"
+                    role="button"
+                    aria-expanded="false"
+                    aria-controls="task-{{ forloop.counter }}">
+                    
+                    <b>{{ task.task.name }}</b>
+                    <i class="task-name-collapse-icon fa-solid fa-chevron-down"></i>
+                </a>
+
+                <!-- OPTIONS AVAILABLE TO PLOT -->
+                <div class="task-options-container collapse border-bottom py-2" id="task-{{ forloop.counter }}">
+
+                    {% for trial in task.trials %}
+                    
+                        <div
+                            data-id="{{ task.task.id }}"
+                            data-trial="{{ trial }}"
+                            data-range="{{trial.0|date:'U'}}-{{trial.1|date:'U'}}"
+                            class="trial-option d-inline-block badge bg-dark text-white cursor-pointer mb-2">
+
+                            {% if record.type == "ambulatory" %}
+                                Trial {{ forloop.counter }}
+
+                            {% elif record.type == "continuous" %}
+
+                                From {{ trial.0|date:'d/M H:i:s' }} to {{ trial.1|date:'d/M H:i:s' }}
+
+                            {% endif %}
+                        </div>
+
+                    {% endfor %}
+
+                </div>
+
+            </div>
+
+        {% endfor %}
+
+    {% else %}
+
+        <div class="alert alert-danger">There are no registered tasks for this record.</div>
+
+    {% endif %}
+
+</div>
+</div>

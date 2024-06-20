@@ -8,7 +8,6 @@ const RECORD_TYPE = document.getElementById("record-type").value;
 // Close the other task containers when a different task is selected:
 const taskNamesContainers   = Array.from(document.getElementsByClassName("task-name-container"));
 const taskOptionsContainers = Array.from(document.getElementsByClassName("task-options-container"));
-const trialOptions          = Array.from(document.getElementsByClassName("trial-option"));
 const metricOptions         = Array.from(document.getElementsByClassName("metric-option"));
 
 taskNamesContainers.forEach(task => task.addEventListener("click", () => {
@@ -20,26 +19,6 @@ taskNamesContainers.forEach(task => task.addEventListener("click", () => {
         }
     });
 }));
-
-
-trialOptions.forEach(outerOption => {
-    outerOption.addEventListener("click", async () => {
-        if ( !outerOption.classList.contains("selected") ) {
-            trialOptions.forEach(innerOption => {
-                innerOption.classList.remove("selected");
-                innerOption.classList.remove("bg-success");
-                innerOption.classList.add("bg-dark");
-            });
-            outerOption.classList.add("selected");
-            outerOption.classList.add("bg-success");
-            outerOption.classList.remove("bg-dark");
-
-            await plotter.loadData();
-            plotter.renderChart();
-        }
-
-    });
-});
 
 const sensorFilters = Array.from(document.getElementsByClassName("sensor-filter"));
 const axisFilters   = Array.from(document.getElementsByClassName("axis-filter"));
@@ -59,7 +38,6 @@ sensorFilters.forEach(outerOption => {
             await plotter.loadData();
             plotter.renderChart();
         }
-
     });
 });
 

@@ -95,7 +95,14 @@ class Task(models.Model):
     id          = models.CharField(max_length=255, primary_key=True)
     name        = models.CharField(max_length=255, null=True)
     description = models.TextField(null=True)
-
+    
+class Position(models.Model):
+    def __str__(self):
+        return self.name
+    
+    id          = models.CharField(max_length=255, primary_key=True)
+    name        = models.CharField(max_length=255, null=True)
+    description = models.TextField(null=True)
 
 class Datafile_task_rel(models.Model):
     """
@@ -109,6 +116,20 @@ class Datafile_task_rel(models.Model):
     datafile  = models.ForeignKey("Datafile", models.CASCADE)
     task      = models.ForeignKey("Task", models.CASCADE)
     trial     = models.IntegerField(null=True)
+    starts_at = models.PositiveBigIntegerField(null=True)
+    ends_at   = models.PositiveBigIntegerField(null=True)
+    
+class Datafile_position_rel(models.Model):
+    """
+    Relate information from Position, Datafile and Record.
+    - How many positions are carried out in a record.
+    - Which position belongs to which datafile.
+    - Which trial of an ambulatory record a position is.
+    - When the position starts and ends in a continuous record.
+    """
+    record    = models.ForeignKey("Record", models.CASCADE)
+    datafile  = models.ForeignKey("Datafile", models.CASCADE)
+    position  = models.ForeignKey("Position", models.CASCADE)
     starts_at = models.PositiveBigIntegerField(null=True)
     ends_at   = models.PositiveBigIntegerField(null=True)
 

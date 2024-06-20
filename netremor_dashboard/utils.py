@@ -1,9 +1,17 @@
 import re
+import os
 import time
 import random
 import string
 import unicodedata
 import numpy as np
+import netremor_dashboard.settings as settings
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+from datetime import datetime
 
 def str2filename(text):
     """
@@ -65,3 +73,27 @@ def measure_time(filename):
             
         return wrapper
     return decorator
+
+def write_log(message, name = "default", level = settings.LOG_INFO):
+    
+    if not os.path.isdir(settings.LOG_DIR):
+        os.mkdir(settings.LOG_DIR, 0o755)
+    
+    current_time = datetime.now()
+    log_filename = "%s-%s.log" % (name, current_time.strftime("%Y-%m-%d"))
+    
+    with open(os.path.join(settings.LOG_DIR, log_filename), "a") as logfile:
+        logfile.write("%s - %s: %s\n" % (current_time.strftime("%Y-%m-%d %H:%M:%S"), level.rjust(5, " "), message))
+        
+
+def send_mail(email_from, email_to, email_subject, email_body):
+    
+    msg            = MIMEMultipart()
+    msg['From']    = email_from
+    msg['To']      = email_to
+    msg['Subject'] = email_subject
+
+    msg.attach(MIMEText(email_body, 'plain'))
+    
+    with smtplib.SMTP('localhost') as server:
+        server.sendmail(email_from, email_to, msg.as_string())

@@ -12,42 +12,56 @@ from csvsort import csvsort
 
 # CUSTOM MODULES
 import imu
+import utils
 
 # DJANGO FRAMEWORK
-from endpoint.models import Subject, Task, Record, Datafile, Imufile, Tremor_file, Datafile_task_rel
+from endpoint.models import Subject, Task, Position, Record, Datafile, Imufile, Tremor_file, Datafile_task_rel, Datafile_position_rel
 from django.conf import settings
-from django.db.models import Min, Max
+from django.db.models import Min, Max, Q
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseServerError
 from django.core.files.storage import default_storage
 
 SENSOR_NAMES = list(map(lambda sensor: sensor[0], settings.SENSOR_CHOICES))
+LOGGING_KEY  = "endpoint"
 
-def save_tasks(incoming_tasks):
+def save_tasks_or_positions(incoming_tasks_or_positions, item_type):
     """
-    Save new tasks in the database.
+    Save new tasks or positions in the database.
 
     Args:
-        incoming_tasks (Dict[]): Array with the tasks belonging to the record that has been sent.
+        incoming_tasks_or_positions (Dict[]): Array with the tasks or positions belonging to the record that has been sent.
         Each item will have at least the following three keys:
-        - task_id
-        - task_name
-        - task_description
+        - task_id          | position_id
+        - task_name        | position_name
+        - task_description | position_description
     """
-    for task in incoming_tasks:
-        if "task_id" in task.keys():
-            task["task_id"] = task["task_id"].upper()
+    
+    if item_type not in ("task", "position"):
+        raise "Unknown item type to store in database. Must be 'task' or 'position'."
+    
+    item_id_key          = "%s_id" % item_type
+    item_name_key        = "%s_name" % item_type
+    item_description_key = "%s_description" % item_type
+    item_class           = Task if item_type == "task" else Position
+    
+    incoming_tasks_or_positions = [item for item in incoming_tasks_or_positions if item_id_key in item.keys()]
+    
+    for item in incoming_tasks_or_positions:
+        item[item_id_key] = item[item_id_key].upper()
     
     # Create list with each item being the arguments for creating the task that is not yet in the database
-    current_stored_tasks = Task.objects.values_list("id", flat=True).distinct()
-    tasks_to_store       = list(map(lambda task: {
-        "id": task["task_id"],
-        "name": task["task_name"] if "task_name" in task.keys() else None,
-        "description": task["task_description"] if "task_description" in task.keys() else None,
-    }, filter(lambda incoming_task: "task_id" in incoming_task.keys() and incoming_task["task_id"] not in current_stored_tasks, incoming_tasks)))
+    current_stored_tasks = item_class.objects.values_list("id", flat=True).distinct()
+    items_to_store       = list(map(lambda item: {
+        "id": item[item_id_key],
+        "name": item[item_name_key] if item_name_key in item.keys() else None,
+        "description": item[item_description_key] if item_description_key in item.keys() else None,
+    }, filter(lambda incoming_task: item_id_key in incoming_task.keys() and incoming_task[item_id_key] not in current_stored_tasks, incoming_tasks_or_positions)))
+
     
-    # Storing those tasks that do not exist in the database:
-    [Task(**task).save() for task in tasks_to_store]
+    # Storing those items that do not exist in the database:
+    [item_class(**item).save() for item in items_to_store]
+
 
 def save_subject(post_fields):
     # Save/update subject in database:
@@ -76,41 +90,25 @@ def save_subject(post_fields):
     
     return subject
     
-def save_imufile(imu_filepath, datafile = None, record = None):
-    initial_timestamp, final_timestamp = imu.rimu(imu_filepath, only_timestamp_range=True)
+def save_processed_file(filepath, read_file_callback, filetype_data_class, datafile = None, record = None):
     
-    imufile_args = {
-        "name": os.path.basename(imu_filepath),
+    initial_timestamp, final_timestamp = read_file_callback(filepath, only_timestamp_range=True)
+    
+    args = {
+        "name": os.path.basename(filepath),
         "initial_timestamp": initial_timestamp,
         "final_timestamp": final_timestamp,
     }
     
     if isinstance(datafile, Datafile):
-        imufile_args["datafile"] = datafile
-        imufile_args["sensor"]   = datafile.sensor
+        args["datafile"] = datafile
+        args["sensor"]   = datafile.sensor
         
     if isinstance(record, Record):
-        imufile_args["record"] = record
+        args["record"] = record
     
-    Imufile(**imufile_args).save()
+    filetype_data_class(**args).save()
     
-def save_tremor_file(tremor_filepath, datafile = None, record = None):
-    initial_timestamp, final_timestamp = imu.rtremor(tremor_filepath, only_timestamp_range=True)
-    
-    tremor_file_args = {
-        "name": os.path.basename(tremor_filepath),
-        "initial_timestamp": initial_timestamp,
-        "final_timestamp": final_timestamp,
-    }
-    
-    if isinstance(datafile, Datafile):
-        tremor_file_args["datafile"] = datafile
-        tremor_file_args["sensor"] = datafile.sensor
-        
-    if isinstance(record, Record):
-        tremor_file_args["record"] = record
-        
-    Tremor_file(**tremor_file_args).save()
     
 def get_model_field_choices_keys(choices):
     """
@@ -135,7 +133,7 @@ def process_record_datafiles(record):
         record (Record): Record whose files are going to be parsed to IMU format.
     """
     
-    datafiles = record.datafile_set.all()
+    datafiles = record.datafile_set.filter(is_processed=False)
     
     # 1. Sort record datafiles (by default the sort key is the "timestamp").
     # multiprocessing.Pool can't be used for this sorting process because the
@@ -157,14 +155,14 @@ def process_record_datafiles(record):
         for datafile, imufiles in zip(datafiles, imu_filepaths):
             
             # Save IMU files in the database.
-            [save_imufile(imufile, datafile, record) for imufile in imufiles]
+            [save_processed_file(imufile, imu.rimu, Imufile, datafile, record) for imufile in imufiles]
             
             # Update null values of the datafile in the database.
             initial_timestamp, final_timestamp = datafile.imufile_set.aggregate(Min("initial_timestamp"), Max("final_timestamp")).values()
             datafile.initial_timestamp         = initial_timestamp
             datafile.final_timestamp           = final_timestamp
             datafile.save()
-           
+        
         imufiles           = record.imufile_set.all()
         tremor_filepaths   = tuple(os.path.join(settings.TREMOR_FILES_DIR, re.sub(r'\.imu$', '.tr', imufile.name)) for imufile in imufiles)
         tremor_files_count = imufiles.count()
@@ -187,9 +185,11 @@ def process_record_datafiles(record):
         
         # Once tremor is computed, save tremor files in database
         pool.starmap(
-            save_tremor_file,
+            save_processed_file,
             zip(
                 tremor_filepaths,
+                (imu.rtremor,)*tremor_files_count,
+                (Tremor_file,)*tremor_files_count,
                 tuple(imufile.datafile for imufile in imufiles),
                 (record,)*tremor_files_count
             )
@@ -284,58 +284,115 @@ def save_ambulatory_record(request, subject, recorded_tasks, record_added_on):
     
     return HttpResponse("OK")
 
-def save_continuous_record(request, subject, recorded_tasks, record_added_on, delta_t):
+def save_continuous_record(request, subject, recorded_tasks, recorded_positions, record_added_on, delta_t):
     # Create or retrieves record:
     record, _ = subject.record_set.get_or_create(type="continuous", defaults={"added_on": record_added_on})
     
-    try:
-        for file in request.FILES:
-
-            # Do not save files whose sensor could not be identified:
-            sensor = next(filter(lambda sensor_name: sensor_name in file, SENSOR_NAMES), None)
-            if sensor is None:
-                print("Skipping not recognized sensor file: %s." % file)
-                continue
-            
-            # Create database instance and insert file:
-            filename = re.sub(r'\.(dat|txt)$', ".csv", file)
-            
-            # Prevent overwriting existing files
-            # TODO: Check if the first timestamp is the same to avoid repeating data
-            if os.path.exists(os.path.join(settings.DATAFILES_DIR, filename)):
-                filename, extension = filename.split(".")
-                filename = "%s-%s.%s" % (filename, uuid.uuid1().hex, extension)
-            
-            
-            print("Saving data file with delta_t:", delta_t)
-            # Store data file instance in database:
-            datafile_args = {
-                "record": record,
-                "name": filename,
-                "sensor": sensor,
-                
-                # TODO: Send this arguments in the request
-                "delta_t": delta_t,
-                "timestamp_threshold": 200,
-                "timestamp_colname": "timestamp",
-                "separator": ",",
-            }
-            
-            datafile = Datafile(**datafile_args)
-            datafile.save()
-            
-            # Save tasks recorded in continuous record:
-            for task in recorded_tasks:
-                Datafile_task_rel(record=record, datafile=datafile, task_id=task["task_id"], starts_at=task["starts_at"], ends_at=task["ends_at"],).save()
-
-            filepath = os.path.join(settings.DATAFILES_DIR, datafile.name)
+    for file in request.FILES:
+        print("Received file", file)
+        # Do not save files whose sensor could not be identified:
+        sensor = next(filter(lambda sensor_name: sensor_name in file, SENSOR_NAMES), None)
+        if sensor is None:
+            print("Skipping not recognized sensor file: %s." % file)
+            continue
+        
+        # Create database instance and insert file:
+        filename = re.sub(r'\.(dat|txt)$', ".csv", file)
+        
+        # Prevent overwriting existing files
+        if os.path.exists(os.path.join(settings.DATAFILES_DIR, filename)):
+            filename, extension = filename.split(".")
+            filename = "%s-%s.%s" % (filename, uuid.uuid1().hex, extension)
+        
+        filepath = os.path.join(settings.DATAFILES_DIR, filename)
+        
+        try:
             default_storage.save(filepath, request.FILES[file])
             
-    except Exception as e:
-        print("Error during continuous record saving process:", e)
-        return HttpResponseServerError("Unexpected error in server.")
+        except Exception as e:
+            print(e)
+            utils.write_log("Could not save continuous record file %s. - %s" % (file.name, repr(e)), LOGGING_KEY, settings.LOG_ERROR)
+            return HttpResponseServerError("Unexpected error in server.")
+    
+    
+        ##########################################        
+        # Avoid storing duplicated sensor samples
+        ##########################################
+                
+        try:
+            with open(filepath, "r") as saved_file:
+                print(saved_file.readline())
+                print(saved_file.readline())
+                saved_file.seek(0)
+                columns          = [colname.strip() for colname in saved_file.readline().split(",")]
+                timestamp_column = columns.index("timestamp")
+                print(timestamp_column)
+                tmp_timestamp = saved_file.readline().split(",")[timestamp_column]
+                print(tmp_timestamp)
+                first_timestamp  = int(tmp_timestamp)
+                
+        except Exception as e:
+            return HttpResponseServerError("Could not get first timestamp from file: %s" % repr(e))
+
+        overlap_datafiles = record.datafile_set.filter(sensor = sensor, final_timestamp__gt = first_timestamp).order_by("initial_timestamp")
         
-    # TODO: Throw handle new datafiles process
+        if len(overlap_datafiles) > 0:
+            
+            no_overlap_filename, extension = filename.split(".")
+            no_overlap_filename = no_overlap_filename + "-no-overlap." + extension
+            no_overlap_filepath = os.path.join(settings.DATAFILES_DIR, no_overlap_filename)
+
+            with open(filepath, "r") as overlap_file:
+                
+                with open(no_overlap_filepath, "w") as no_overlap_file:
+                    
+                    # Write column names line
+                    no_overlap_file.write(overlap_file.readline())
+                    
+                    # Process below is under the assumption that there are no overlapped files stored yet:
+                    for overlap_datafile in overlap_datafiles:
+                        
+                        while line := overlap_file.readline():
+                        
+                            timestamp = int(line.split(",")[timestamp_column])
+                            
+                            if timestamp < overlap_datafile.initial_timestamp or timestamp > overlap_datafile.final_timestamp:
+                                no_overlap_file.write(line)
+                                
+        
+            os.unlink(filepath)
+            os.rename(no_overlap_filepath, filepath)
+            
+            
+        ##############################################
+        # SAVE FILES, POSITIONS AND TASKS IN DATABASE
+        ##############################################
+
+        # Store data file instance in database:
+        datafile_args = {
+            "record": record,
+            "name": filename,
+            "sensor": sensor,
+            
+            # TODO: Send this arguments in the request
+            "delta_t": delta_t,
+            "timestamp_threshold": 200,
+            "timestamp_colname": "timestamp",
+            "separator": ",",
+        }
+        
+        datafile = Datafile(**datafile_args)
+        datafile.save()
+        
+        # Save tasks and position recorded in continuous record:
+        for items, item_name, data_class in zip([recorded_tasks, recorded_positions], ["task", "position"], [Datafile_task_rel, Datafile_position_rel]):
+            
+            keys           = ["%s_id" % item_name, "starts_at", "ends_at"]
+            items_to_store = [dict((key, item[key]) for key in keys if key in item.keys()) for item in items]
+
+            [data_class(record=record, datafile=datafile, **item).save() for item in items_to_store]
+
+
     threading.Thread(target = process_record_datafiles, args = [record]).start()
     
     return HttpResponse(200)
