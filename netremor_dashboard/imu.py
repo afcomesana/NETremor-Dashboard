@@ -74,7 +74,7 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
     imu_file_index = 0
     imu_dirname    = os.path.dirname(imu_filepath)
     imu_basename   = os.path.basename(imu_filepath)
-
+    
     ######################################################################################################################################################
     # Write IMU file header:
     # - DELTA_TIMESTAMP:   time increment between samples (unsigned short integer - 2 bytes)
@@ -100,10 +100,10 @@ def wimu(csv_filepath, imu_filepath, delta_t, timestamp_threshold = None, timest
     body_line_binary_format = get_body_sample_format(len(columns))
     
     columns = list(map(lambda col: "".join(filter(lambda char: char in string.ascii_lowercase, col.lower())), columns))
-    columns = ",".join(columns).encode("utf-8") + b'\0'
+    columns = separator.join(columns).encode("utf-8") + b'\0'
     
     # Get first timestamp to store it in IMU file header:
-    initial_timestamp = int(csv_file.readline().split(",")[timestamp_index].strip())
+    initial_timestamp = int(csv_file.readline().split(separator)[timestamp_index].strip())
     
     imu_file.write(get_imu_header(delta_t, initial_timestamp, columns))
 

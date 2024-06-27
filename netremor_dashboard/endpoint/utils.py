@@ -1,13 +1,10 @@
 # PYTHON LIBRARIES
 import os
 import re
-import math
 import uuid
 import signal
 import threading
 import multiprocessing
-import numpy as np
-from csvsort import csvsort
 
 
 # CUSTOM MODULES
@@ -125,7 +122,7 @@ def get_model_field_choices_keys(choices):
 
 def process_record_datafiles(record):
     """
-    1. Sort record datafiles.
+    [1. Sort record datafiles.]
     2. Format data to IMU file type.
     3. Compute tremor on IMU files.
 
@@ -139,7 +136,8 @@ def process_record_datafiles(record):
     # multiprocessing.Pool can't be used for this sorting process because the
     # process uses the multiprocessig itself and would raise an error
     
-    [sort_csv_file(datafile) for datafile in datafiles]
+    # TODO: Create function to sort csv files (file and without loading the whole file in memory!)
+    # [sort_csv_file(datafile) for datafile in datafiles]
     
     with multiprocessing.Pool() as pool:
     
@@ -232,9 +230,8 @@ def sort_csv_file(datafile, key = "timestamp", separator = ","):
         except ValueError:
             # File won't be sorted.
             return
-    
+        
     # Sort the file:
-    csvsort(datafile_path, [key_index], delimiter=separator)
     
 
 def save_ambulatory_record(request, subject, recorded_tasks, record_added_on):
@@ -289,7 +286,6 @@ def save_continuous_record(request, subject, recorded_tasks, recorded_positions,
     record, _ = subject.record_set.get_or_create(type="continuous", defaults={"added_on": record_added_on})
     
     for file in request.FILES:
-        print("Received file", file)
         # Do not save files whose sensor could not be identified:
         sensor = next(filter(lambda sensor_name: sensor_name in file, SENSOR_NAMES), None)
         if sensor is None:
@@ -301,8 +297,8 @@ def save_continuous_record(request, subject, recorded_tasks, recorded_positions,
         
         # Prevent overwriting existing files
         if os.path.exists(os.path.join(settings.DATAFILES_DIR, filename)):
-            filename, extension = filename.split(".")
-            filename = "%s-%s.%s" % (filename, uuid.uuid1().hex, extension)
+            utils.write_log("Not saving file because it already exist %s" % filename, settings.LOG_WARN)
+            continue
         
         filepath = os.path.join(settings.DATAFILES_DIR, filename)
         
@@ -321,14 +317,10 @@ def save_continuous_record(request, subject, recorded_tasks, recorded_positions,
                 
         try:
             with open(filepath, "r") as saved_file:
-                print(saved_file.readline())
-                print(saved_file.readline())
                 saved_file.seek(0)
                 columns          = [colname.strip() for colname in saved_file.readline().split(",")]
                 timestamp_column = columns.index("timestamp")
-                print(timestamp_column)
                 tmp_timestamp = saved_file.readline().split(",")[timestamp_column]
-                print(tmp_timestamp)
                 first_timestamp  = int(tmp_timestamp)
                 
         except Exception as e:

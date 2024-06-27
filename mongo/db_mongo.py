@@ -1,7 +1,6 @@
 from pymongo.mongo_client import MongoClient
 
 uri      = "mongodb://138.4.22.25:27017"
-# uri_for_sending_data      = "mongodb://138.4.22.25:8000"
 client   = MongoClient(uri)
 
 # print(client.server_info())

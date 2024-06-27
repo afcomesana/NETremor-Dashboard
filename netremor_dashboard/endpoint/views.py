@@ -22,6 +22,13 @@ API_KEY = os.getenv("API_KEY")
 @csrf_exempt # disable default csrf security checks from django
 def save_record(request):
 
+    print("NEW REQUEST")
+    
+    for file in request.FILES:
+        print(file)
+
+    return HttpResponse("OK")
+
     if request.method != "POST":
         return HttpResponseBadRequest("Método no válido.")
     
