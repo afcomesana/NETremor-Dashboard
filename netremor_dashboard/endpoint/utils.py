@@ -1,10 +1,12 @@
 # PYTHON LIBRARIES
 import os
 import re
-import uuid
-import signal
 import threading
+import statistics
 import multiprocessing
+import pandas as pd
+import numpy as np
+from scipy import signal
 
 
 # CUSTOM MODULES
@@ -12,10 +14,9 @@ import imu
 import utils
 
 # DJANGO FRAMEWORK
-from endpoint.models import Subject, Task, Position, Record, Datafile, Imufile, Tremor_file, Datafile_task_rel, Datafile_position_rel
+from endpoint.models import Subject, Task, Position, Record, Datafile, Imufile, Tremor_file, Datafile_task_rel, Datafile_position_rel, Bradykinesia
 from django.conf import settings
-from django.db.models import Min, Max, Q
-from django.views.decorators.csrf import csrf_exempt
+from django.db.models import Min, Max
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseServerError
 from django.core.files.storage import default_storage
 
@@ -122,7 +123,7 @@ def get_model_field_choices_keys(choices):
 
 def process_record_datafiles(record):
     """
-    [1. Sort record datafiles.]
+    1. Sort record datafiles.
     2. Format data to IMU file type.
     3. Compute tremor on IMU files.
 
@@ -130,73 +131,87 @@ def process_record_datafiles(record):
         record (Record): Record whose files are going to be parsed to IMU format.
     """
     
+    if record.is_being_processed:
+        return
+    
+    record.is_being_processed = True
+    record.save()
+    
     datafiles = record.datafile_set.filter(is_processed=False)
     
-    # 1. Sort record datafiles (by default the sort key is the "timestamp").
-    # multiprocessing.Pool can't be used for this sorting process because the
-    # process uses the multiprocessig itself and would raise an error
-    
-    # TODO: Create function to sort csv files (file and without loading the whole file in memory!)
-    # [sort_csv_file(datafile) for datafile in datafiles]
-    
-    with multiprocessing.Pool() as pool:
-    
-        # 2. Format data to IMU file type.        
-        csv_filepaths = tuple(os.path.join(settings.DATAFILES_DIR, datafile.name) for datafile in datafiles)
-        imu_filepaths = tuple(os.path.join(settings.IMUFILES_DIR, re.sub(r'\.csv$', ".imu", datafile.name)) for datafile in datafiles)
-        wimu_args     = tuple((datafile.delta_t, datafile.timestamp_threshold, datafile.timestamp_colname, datafile.separator) for datafile in datafiles)
-        wimu_args     = tuple(map(lambda filepaths, args: filepaths + args, zip(csv_filepaths, imu_filepaths), wimu_args))
-        
-        imu_filepaths = pool.starmap(imu.wimu, wimu_args)
-        
-        # Save IMU file instances in database:
-        for datafile, imufiles in zip(datafiles, imu_filepaths):
+    try:
+        with multiprocessing.Pool() as pool:
             
-            # Save IMU files in the database.
-            [save_processed_file(imufile, imu.rimu, Imufile, datafile, record) for imufile in imufiles]
+            # 1. Sort record datafiles (by default the sort key is the "timestamp").
+            # multiprocessing.Pool can't be used for this sorting process because the
+            # process uses the multiprocessig itself and would raise an error
+            pool.map(sort_csv_file, datafiles)
             
-            # Update null values of the datafile in the database.
-            initial_timestamp, final_timestamp = datafile.imufile_set.aggregate(Min("initial_timestamp"), Max("final_timestamp")).values()
-            datafile.initial_timestamp         = initial_timestamp
-            datafile.final_timestamp           = final_timestamp
-            datafile.save()
-        
-        imufiles           = record.imufile_set.all()
-        tremor_filepaths   = tuple(os.path.join(settings.TREMOR_FILES_DIR, re.sub(r'\.imu$', '.tr', imufile.name)) for imufile in imufiles)
-        tremor_files_count = imufiles.count()
-        
-        # Compute tremor for each imufile and save computation in a "tremor" file
-        tremor_filepaths = pool.starmap(
-            imu.wtremor,
-            zip(
-                tuple(os.path.join(settings.IMUFILES_DIR, imufile.name) for imufile in imufiles),
-                tremor_filepaths,
-                (settings.DEFAULT_TREMOR_LOW_PASS_FREQ,)*tremor_files_count,
-                (settings.DEFAULT_TREMOR_HIGH_PASS_FREQ,)*tremor_files_count,
-                (settings.DEFAULT_TREMOR_HOP_SECONDS,)*tremor_files_count,
-                (settings.DEFAULT_TREMOR_WINDOW_SECONDS,)*tremor_files_count,
+            threading.Thread(compute_bradykinesia, args=[record.subject_id]).start()
+            
+            # 2. Format data to IMU file type.        
+            csv_filepaths = tuple(os.path.join(settings.DATAFILES_DIR, datafile.name) for datafile in datafiles)
+            imu_filepaths = tuple(os.path.join(settings.IMUFILES_DIR, re.sub(r'\.csv$', ".imu", datafile.name)) for datafile in datafiles)
+            wimu_args     = tuple((datafile.delta_t, datafile.timestamp_threshold, datafile.timestamp_colname, datafile.separator) for datafile in datafiles)
+            wimu_args     = tuple(map(lambda filepaths, args: filepaths + args, zip(csv_filepaths, imu_filepaths), wimu_args))
+            
+            imu_filepaths = pool.starmap(imu.wimu, wimu_args)
+            
+            # Save IMU file instances in database:
+            for datafile, imufiles in zip(datafiles, imu_filepaths):
+                
+                # Save IMU files in the database.
+                [save_processed_file(imufile, imu.rimu, Imufile, datafile, record) for imufile in imufiles]
+                
+                # Update null values of the datafile in the database.
+                initial_timestamp, final_timestamp = datafile.imufile_set.aggregate(Min("initial_timestamp"), Max("final_timestamp")).values()
+                datafile.initial_timestamp         = initial_timestamp
+                datafile.final_timestamp           = final_timestamp
+                datafile.save()
+            
+            imufiles           = record.imufile_set.all()
+            tremor_filepaths   = tuple(os.path.join(settings.TREMOR_FILES_DIR, re.sub(r'\.imu$', '.tr', imufile.name)) for imufile in imufiles)
+            tremor_files_count = imufiles.count()
+            
+            # 3. Compute tremor for each imufile and save computation in a "tremor" file
+            tremor_filepaths = pool.starmap(
+                imu.wtremor,
+                zip(
+                    tuple(os.path.join(settings.IMUFILES_DIR, imufile.name) for imufile in imufiles),
+                    tremor_filepaths,
+                    (settings.DEFAULT_TREMOR_LOW_PASS_FREQ,)*tremor_files_count,
+                    (settings.DEFAULT_TREMOR_HIGH_PASS_FREQ,)*tremor_files_count,
+                    (settings.DEFAULT_TREMOR_HOP_SECONDS,)*tremor_files_count,
+                    (settings.DEFAULT_TREMOR_WINDOW_SECONDS,)*tremor_files_count,
+                )
             )
-        )
-        
-        imufiles = [imufile for imufile, tremor_filepath in zip(imufiles, tremor_filepaths) if tremor_filepath is not None]
-        tremor_filepaths = [tremor_filepath for tremor_filepath in tremor_filepaths if tremor_filepath is not None]
-        
-        # Once tremor is computed, save tremor files in database
-        pool.starmap(
-            save_processed_file,
-            zip(
-                tremor_filepaths,
-                (imu.rtremor,)*tremor_files_count,
-                (Tremor_file,)*tremor_files_count,
-                tuple(imufile.datafile for imufile in imufiles),
-                (record,)*tremor_files_count
+            
+            imufiles = [imufile for imufile, tremor_filepath in zip(imufiles, tremor_filepaths) if tremor_filepath is not None]
+            tremor_filepaths = [tremor_filepath for tremor_filepath in tremor_filepaths if tremor_filepath is not None]
+            
+            # Once tremor is computed, save tremor files in database
+            pool.starmap(
+                save_processed_file,
+                zip(
+                    tremor_filepaths,
+                    (imu.rtremor,)*tremor_files_count,
+                    (Tremor_file,)*tremor_files_count,
+                    tuple(imufile.datafile for imufile in imufiles),
+                    (record,)*tremor_files_count
+                )
             )
-        )
 
+            
+        for datafile in datafiles:
+            datafile.is_processed = True
+            datafile.save()
+            
+    except Exception as e:
+        utils.write_log("Could not process record: %s" % repr(e), LOGGING_KEY, settings.LOG_ERROR)
         
-    for datafile in datafiles:
-        datafile.is_processed = True
-        datafile.save()
+    finally:
+        record.is_being_processed = False
+        record.save()
     
     
 def bandpass_filter(data, low_pass_frequency, high_pass_frequency, sampling_frequency):
@@ -218,11 +233,16 @@ def sort_csv_file(datafile, key = "timestamp", separator = ","):
     
     # Define the actual path of the datafile:
     datafile_path = os.path.join(settings.DATAFILES_DIR, datafile.name)
-
-    # Find the column index of the key used to sort:
-    with open(datafile_path, "r") as file:
+    
+    tmp_filename  = "tmp_%s" % os.path.basename(datafile_path)
+    tmp_filepath  = os.path.join(os.path.dirname(datafile_path), tmp_filename)
+    
+    # Find the column index of the key used to sort and write the temporary file without column names to order it:
+    with open(datafile_path, "r") as original_file:
         
-        keys = list(map(lambda colname: colname.strip(), file.readline().split(separator)))
+        column_names = original_file.readline()
+        keys         = list(map(lambda colname: colname.strip(), column_names.split(separator)))
+        
         try:
             key_index = keys.index(key)
             
@@ -231,8 +251,25 @@ def sort_csv_file(datafile, key = "timestamp", separator = ","):
             # File won't be sorted.
             return
         
-    # Sort the file:
+        with open(tmp_filepath, "w") as temporary_file:
+            
+            while line := original_file.readline():
+                temporary_file.write(line)
     
+    key_index += 1
+    
+    # Sort the file:
+    os.system("sort -n -t '%s' -k %s,%s -o %s %s" % (separator, key_index, key_index, tmp_filepath, tmp_filepath))
+    
+    with open(tmp_filepath, "r") as sorted_file:
+        
+        with open(datafile_path, "w") as file:
+            file.write(column_names)
+
+            while line := sorted_file.readline():
+                file.write(line)
+                
+    os.unlink(tmp_filepath)
 
 def save_ambulatory_record(request, subject, recorded_tasks, record_added_on):
     
@@ -297,7 +334,7 @@ def save_continuous_record(request, subject, recorded_tasks, recorded_positions,
         
         # Prevent overwriting existing files
         if os.path.exists(os.path.join(settings.DATAFILES_DIR, filename)):
-            utils.write_log("Not saving file because it already exist %s" % filename, settings.LOG_WARN)
+            utils.write_log("Not saving file because it already exist %s" % filename, LOGGING_KEY, settings.LOG_WARN)
             continue
         
         filepath = os.path.join(settings.DATAFILES_DIR, filename)
@@ -306,7 +343,6 @@ def save_continuous_record(request, subject, recorded_tasks, recorded_positions,
             default_storage.save(filepath, request.FILES[file])
             
         except Exception as e:
-            print(e)
             utils.write_log("Could not save continuous record file %s. - %s" % (file.name, repr(e)), LOGGING_KEY, settings.LOG_ERROR)
             return HttpResponseServerError("Unexpected error in server.")
     
@@ -388,3 +424,111 @@ def save_continuous_record(request, subject, recorded_tasks, recorded_positions,
     threading.Thread(target = process_record_datafiles, args = [record]).start()
     
     return HttpResponse(200)
+
+def compute_bradykinesia(id_participant):
+    print("Running compute bradykinesia with subject id", id_participant)
+    
+    # Verificación del participante
+    if not id_participant: return
+    
+    # Definición de los parámetros de los filtros
+    fs = 30.0
+    frecuencia_corte_HP = 0.05
+    frecuencia_corte_LP = 3.5
+    lim_inf_brad = 0.1
+    lim_sup_brad = 0.15
+    frecuencia_corte_HP_norm = frecuencia_corte_HP / (0.5 * fs)
+    frecuencia_corte_LP_norm = frecuencia_corte_LP / (0.5 * fs)
+    b, a = signal.butter(N=4, Wn=frecuencia_corte_HP_norm, btype='high', analog=False)
+    d, c = signal.butter(N=4, Wn=frecuencia_corte_LP_norm, btype='low', analog=False)
+
+    
+    records = Record.objects.filter(subject_id=id_participant)
+
+    continuous_records = list(filter(lambda record: record.type == "continuous", records))
+    ambulatory_records = list(filter(lambda record: record.type == "ambulatory", records))
+    
+    continuous_record_ids = [record.id for record in continuous_records]
+    ambulatory_record_ids = [record.id for record in ambulatory_records]
+    
+    continuous_datafiles    = Datafile.objects.filter(record_id__in=continuous_record_ids, sensor="accelerometer")
+    ambulatory_datafile_ids = [rel.datafile.id for rel in Datafile_task_rel.objects.filter(record_id__in=ambulatory_record_ids, task__isnull=False)]
+    ambulatory_datafiles    = Datafile.objects.filter(id__in=ambulatory_datafile_ids, sensor="accelerometer")
+    
+    nombres  = [datafile.name for datafile in continuous_datafiles]
+    nombres += [datafile.name for datafile in ambulatory_datafiles]
+
+    if nombres:
+        potMax = []
+        frecDom = []
+
+        for nombre in nombres:
+
+            # Leer el archivo CSV y mostrar su contenido
+            file_path = os.path.join(settings.DATAFILES_DIR, nombre)
+            if os.path.isfile(file_path):
+                datos = pd.read_csv(file_path)
+
+                # Limpiar nombres de columnas
+                datos.columns = datos.columns.str.strip()
+
+                if 'x' in datos.columns and 'y' in datos.columns and 'z' in datos.columns:
+                    aceleracion_x = datos['x']
+                    aceleracion_y = datos['y']
+                    aceleracion_z = datos['z']
+
+                    aceleracion_x_filtrada_HP = signal.filtfilt(b, a, aceleracion_x)
+                    aceleracion_y_filtrada_HP = signal.filtfilt(b, a, aceleracion_y)
+                    aceleracion_z_filtrada_HP = signal.filtfilt(b, a, aceleracion_z)
+
+                    aceleracion_x_filtrada_LP = signal.filtfilt(d, c, aceleracion_x_filtrada_HP)
+                    aceleracion_y_filtrada_LP = signal.filtfilt(d, c, aceleracion_y_filtrada_HP)
+                    aceleracion_z_filtrada_LP = signal.filtfilt(d, c, aceleracion_z_filtrada_HP)
+
+                    fx, Pxxx_filtrado_LP = signal.periodogram(aceleracion_x_filtrada_LP, fs)
+                    fy, Pxxy_filtrado_LP = signal.periodogram(aceleracion_y_filtrada_LP, fs)
+                    fz, Pxxz_filtrado_LP = signal.periodogram(aceleracion_z_filtrada_LP, fs)
+
+                    Pxxx_dB = 10 * np.log10(Pxxx_filtrado_LP)
+                    Pxxy_dB = 10 * np.log10(Pxxy_filtrado_LP)
+                    Pxxz_dB = 10 * np.log10(Pxxz_filtrado_LP)
+
+                    idx_max_x = np.argmax(Pxxx_dB)
+                    idx_max_y = np.argmax(Pxxy_dB)
+                    idx_max_z = np.argmax(Pxxz_dB)
+
+                    f_max_x = fx[idx_max_x]
+                    f_max_y = fy[idx_max_y]
+                    f_max_z = fz[idx_max_z]
+
+                    max_power = np.maximum.reduce([Pxxx_dB[idx_max_x], Pxxy_dB[idx_max_y], Pxxz_dB[idx_max_z]])
+
+                    potMax.append(max_power)
+                    frecDom.append(f_max_x if max_power == Pxxx_dB[idx_max_x] else
+                                            (f_max_y if max_power == Pxxy_dB[idx_max_y] else f_max_z))
+
+        # Calcular medias
+        media_potMax = statistics.mean(potMax) if potMax else np.nan
+        media_frecDom = statistics.mean(frecDom) if frecDom else np.nan
+
+        # Definición de la función de probabilidad de bradicinesia
+        def probabilidad_bradicinesia(f):
+            if f <= lim_inf_brad:
+                return 1.0
+            elif f <= lim_sup_brad:
+                P_start = 1.0
+                P_end = 0.05
+                f_start = lim_inf_brad
+                f_end = lim_sup_brad
+                return P_start + (P_end - P_start) / (f_end - f_start) * (f - f_start)
+            else:
+                P_start = 0.05
+                P_end = 0.0
+                f_start = lim_sup_brad
+                f_end = 1.5 * lim_sup_brad
+                return max(P_start + (P_end - P_start) / (f_end - f_start) * (f - f_start), 0.0)
+
+        # Calcular la probabilidad de bradicinesia
+        probabilidad = probabilidad_bradicinesia(media_frecDom) * 100
+        
+        Bradykinesia(subject_id=id_participant, probability = probabilidad).save()

@@ -53,9 +53,10 @@ class Record(models.Model):
         ("finger_tap", "Finger Tap")
     ]
     
-    subject  = models.ForeignKey("Subject", on_delete=models.CASCADE)
-    type     = models.CharField(max_length=20, choices=RECORD_TYPES)
-    added_on = models.DateTimeField(default=timezone.now)
+    subject            = models.ForeignKey("Subject", on_delete=models.CASCADE)
+    type               = models.CharField(max_length=20, choices=RECORD_TYPES)
+    added_on           = models.DateTimeField(default=timezone.now)
+    is_being_processed = models.BooleanField(default=False)
     
 class Datafile(models.Model):
     def __str__(self):
@@ -132,6 +133,11 @@ class Datafile_position_rel(models.Model):
     position  = models.ForeignKey("Position", models.CASCADE)
     starts_at = models.PositiveBigIntegerField(null=True)
     ends_at   = models.PositiveBigIntegerField(null=True)
+    
+class Bradykinesia(models.Model):
+    subject     = models.ForeignKey("Subject", models.CASCADE)
+    probability = models.FloatField(null=False)
+    added_on    = models.DateTimeField(default=timezone.now)
 
 @receiver(post_delete)
 def signal_data_file_deleted(sender, instance, using, **kwargs):

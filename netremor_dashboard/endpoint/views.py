@@ -14,20 +14,12 @@ from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbid
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.core.files.storage import default_storage
-from django.core.exceptions import ObjectDoesNotExist
 
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 
 @csrf_exempt # disable default csrf security checks from django
 def save_record(request):
-
-    print("NEW REQUEST")
-    
-    for file in request.FILES:
-        print(file)
-
-    return HttpResponse("OK")
 
     if request.method != "POST":
         return HttpResponseBadRequest("Método no válido.")
@@ -65,7 +57,6 @@ def save_record(request):
         
     except KeyError:
         recorded_tasks = []
-        
 
     try:
         recorded_positions = body_data.pop("recorded_positions")
@@ -79,6 +70,7 @@ def save_record(request):
         record_added_on = body_data.pop("record_added_on")
         record_added_on = datetime.fromtimestamp(record_added_on/1000).astimezone(timezone(settings.TIME_ZONE))
         # TODO: Consider changing database type of record_added_on to integer and do not use datetimes.
+        
     except KeyError:
         return HttpResponseBadRequest("Falta el campo 'record_added_on' en la solicitud.")
     
@@ -91,13 +83,14 @@ def save_record(request):
     try:
         # If the subject already exists, it will be updated.
         subject = utils.save_subject(body_data)
+        
     except KeyError as error_message:
         return HttpResponseBadRequest("Key error in request: %s" % error_message)
     
     # The request path will follow the form "/endpoint/<record_type>" or "/endpoint/<record_type>/"
     # Get the record type from the request path to properly call the function that will process the
     # record data.
-    record_type = list(filter(lambda item: bool(item.strip()), request.path.split("/")))[-1]
+    record_type          = list(filter(lambda item: bool(item.strip()), request.path.split("/")))[-1]
     save_record_callback = getattr(utils, "save_%s_record" % record_type)
 
     return save_record_callback(request, subject, recorded_tasks, recorded_positions, record_added_on, delta_t)

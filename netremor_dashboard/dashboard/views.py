@@ -1,7 +1,7 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.http import HttpResponse, Http404, HttpResponseBadRequest, HttpResponseServerError
 from django.template import loader
-from endpoint.models import Subject, Record, Datafile, Task, Datafile_task_rel
+from endpoint.models import Subject, Record, Datafile, Task, Datafile_task_rel, Bradykinesia
 from django.conf import settings
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
@@ -191,7 +191,15 @@ def logout_user(request):
 def records(request, subject_id):
     subject = get_object_or_404(Subject, pk=subject_id)
     
-    context = {"subject": subject}
+    try:
+        bradykinesia_record      = Bradykinesia.objects.get(subject=subject)
+        bradykinesia_probability = bradykinesia_record.probability
+        
+    except Bradykinesia.DoesNotExist:
+        bradykinesia_probability = 0
+    
+    
+    context = {"subject": subject, "bradykinesia_probability": bradykinesia_probability}
     
     try:
         context["continuous_record"] = subject.record_set.get(type = "continuous")
