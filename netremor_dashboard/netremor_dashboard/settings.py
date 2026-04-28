@@ -12,6 +12,9 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR         = Path(__file__).resolve().parent.parent
@@ -44,7 +47,7 @@ LOG_WARN  = "WARN"
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-i8um7+i47%m67y_gp(kvu6_#unxp*pt&9i&cg#4zjrb8l@*eo3'
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # REDIRECT TRAFFIC FROM HTTP TO HTTPS:
 # SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -107,12 +110,14 @@ WSGI_APPLICATION = 'netremor_dashboard.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': "netremor_db",
         "USER": "dashboard_usu",
-        "PASSWORD": "Mt4?FmQsj$nXCp6t",
+        "PASSWORD": DB_PASSWORD,
         "HOST": "localhost"
     }
 }
