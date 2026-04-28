@@ -809,12 +809,10 @@ That prevents interpolation drift from accumulating without bound.
 
 The custom `.imu` format is not a raw archival mirror of the source CSV. It is an intentionally normalized working format optimized for:
 
-- interactive reads,
+- speed up dashboard rendering
 - approximate regular sampling,
 - compactness,
 - and downstream signal processing.
-
-That is a very reasonable tradeoff for research and dashboard usage, as long as the raw CSV is still preserved, which this project does.
 
 ---
 
@@ -842,7 +840,7 @@ final_timestamp = initial_timestamp + total_samples * delta_t
 
 ### Why this is valuable
 
-Because samples are fixed-width and timestamps are reconstructable, the system can jump to the relevant region without scanning the whole file line by line. That is exactly the kind of access pattern you want when rendering a chart over a selected time interval.
+Because samples are fixed-width and timestamps are reconstructable, the system can jump to the relevant region without scanning the whole file line by line (a nice access pattern you want when rendering a chart over a selected time interval).
 
 ### `n_samples` support
 
@@ -1016,32 +1014,6 @@ The `finally` block clears `record.is_being_processed`, ensuring the record can 
 
 ---
 
-## Bradykinesia Computation
-
-Although the repository is mostly an ingestion/visualization platform, it already includes one concrete analytical metric: `compute_bradykinesia()`.
-
-### What it does
-
-It:
-
-1. gathers accelerometer CSV files across the subject's continuous and ambulatory records,
-2. filters each axis with a high-pass then low-pass filter,
-3. computes periodograms,
-4. finds the dominant frequency per axis,
-5. keeps the axis with maximum power,
-6. averages dominant frequencies across files,
-7. maps the mean dominant frequency to a bradykinesia probability.
-
-### Why this is architecturally important
-
-This function demonstrates how the repository can evolve beyond raw-data management into clinically or behaviorally meaningful analytics.
-
-For activity-recognition research, it suggests a natural future direction:
-
-- replace or complement this heuristic with trained models,
-- then store activity probabilities or episode detections in the same way.
-
----
 
 ## Dashboard Architecture
 
@@ -1077,22 +1049,8 @@ This is helpful in collaborative research environments where access should be re
 
 ## Subject listing
 
-The index page does not list every subject in the database. It lists subjects that have at least one processed `Datafile`.
-
-That is a subtle but meaningful design decision:
-
-- it keeps the UI focused on subjects with usable data,
-- and avoids presenting incomplete records as fully ready.
-
-## Record listing
-
-The subject detail page distinguishes:
-
-- one continuous record, if present
-- zero or more ambulatory records
-- latest bradykinesia probability if available
-
-That layout reflects the domain assumption that a subject may accumulate many task-based recordings over time but conceptually only one continuous stream record type.
+The index page only lists subjectsthat have at least one processed `Datafile` to keep the UI focused on subjects with usable data
+and avoid presenting incomplete records as fully ready.
 
 ---
 
@@ -1116,7 +1074,7 @@ For continuous records, the zip includes:
 - `tasks.csv` containing task IDs and time bounds,
 - `positions.csv` containing position IDs and time bounds.
 
-That export pattern is very helpful for offline feature engineering or model training because it preserves both the signals and the labels.
+usable for offline feature engineering or model training.
 
 ---
 
@@ -1142,9 +1100,7 @@ The frontend is designed around an important constraint:
 
 **long inertial recordings are too large to send to the browser in full every time the user zooms or switches sensor/metric.**
 
-So the chart is not a static full-data plot. It is a request-driven viewport over the data.
-
-That is a good architectural choice for sensor-heavy applications.
+So the chart is not a static full-data plot. It is a request-driven viewport over the data. A required architectural choice for sensor-heavy applications.
 
 ---
 
@@ -1152,56 +1108,9 @@ That is a good architectural choice for sensor-heavy applications.
 
 The record page exposes three control groups:
 
-### 1. Sensor selector
-
-The user can switch between:
-
-- accelerometer
-- gyroscope
-
-Only one sensor is active at a time.
-
-### 2. Axis selector
-
-The user can show/hide:
-
-- x
-- y
-- z
-
-These are multi-select in effect: any subset of axes can be shown.
-
-### 3. Metric selector
-
-The implemented metric options are:
-
-- `tremor`
-- `raw`
-
-For ambulatory code paths there is also backend support for `spectrogram` and a placeholder for `energy`, although the current record page wiring is centered on the continuous-record viewer.
-
----
-
-## How the chart is initialized
-
-`record.js` instantiates a single `Plotter`.
-
-The `Plotter` constructor:
-
-1. locates the chart container,
-2. reads the record type from a hidden DOM element,
-3. creates an SVG,
-4. attaches a D3 zoom behavior,
-5. creates a translated chart group,
-6. defines a clip path,
-7. creates a line group inside the clipped area,
-8. calls `resizeChart()`.
-
-This produces a chart area where the plotted lines cannot overflow outside the intended viewport.
-
-## Why the clip path matters
-
-Without the clip path, panning and zooming long lines could draw outside the chart region. Using an SVG clip path is the correct low-level D3 solution for this kind of interactive plot.
+1. Sensor selector
+2. Axis selector
+3. Metric selector (tremor, raw)
 
 ---
 
@@ -1220,16 +1129,7 @@ The request body is JSON like:
 }
 ```
 
-Where:
-
-- `sensor` is the selected sensor,
-- `metric` is `raw` or `tremor`,
-- `samples` is approximately the chart width in pixels,
-- `timeRange` is either false/null for the full record or a selected zoom window.
-
-The request includes the CSRF token from cookies.
-
-This design is smart because it uses viewport width as a natural upper bound on returned sample count. There is no reason to send one million points to draw on a thousand-pixel chart.
+It uses viewport width as a natural upper bound on returned sample count. There is no reason to send one million points to draw on a thousand-pixel chart.
 
 ---
 
@@ -1321,20 +1221,6 @@ This separation is a good sign of a reusable plotting abstraction: different met
 
 ---
 
-## Automatic axis selection
-
-When data is first loaded and no axis is selected yet, the frontend computes the mean value for each axis over the loaded data and auto-selects the axis with the largest mean.
-
-This is a small but thoughtful UX feature. It ensures the chart is informative immediately, especially for tremor data where one axis may dominate.
-
-Then the user can toggle any axis on or off manually.
-
-Axis visibility is controlled by:
-
-- adding/removing the `selected` CSS class on buttons,
-- and drawing lines with or without the `opacity-0` class.
-
----
 
 ## How zoom works
 
@@ -1377,80 +1263,6 @@ This is exactly the right thing to do for sensor streams that may include record
 
 ---
 
-## Line rendering
-
-Each selected axis is rendered separately.
-
-For every data chunk:
-
-- if the chunk has more than one point, draw a D3 path
-- if it has exactly one point, draw a circle
-
-This avoids the common edge case where tiny chunks disappear because a path with one point has no visible extent.
-
-### Color coding
-
-Axis colors are defined in `constants.js`:
-
-- x: `#3B3486`
-- y: `#7E2553`
-- z: `#80BCBD`
-
-The same axis color palette is reused across sensors.
-
-### Axis units
-
-Y-axis titles depend on both metric and sensor:
-
-- raw accelerometer: `m/s^2`
-- raw gyroscope: `deg/s`
-- tremor views: `dB`
-
-This is a good example of domain-specific display logic embedded in the frontend constants rather than scattered through rendering code.
-
----
-
-## Ambulatory visualization path
-
-The repository also contains code for ambulatory-record plotting:
-
-- `dashboard/templates/dashboard/ambulatory-record.html`
-- `dashboard/static/dashboard/ambulatory-record.js`
-- backend helpers:
-  - `get_ambulatory_record_trial_data()`
-  - `get_ambulatory_record_trial_spectrogram()`
-
-### Intended behavior
-
-The intended ambulatory UI appears to be:
-
-1. show task cards,
-2. expand to list trials,
-3. choose a trial,
-4. fetch trial-specific data,
-5. plot raw or derived metrics.
-
-### What the backend supports
-
-The backend can:
-
-- load all rows for a task/trial pair,
-- merge accelerometer and gyroscope rows,
-- sort them by timestamp,
-- and compute a spectrogram-like representation using ShortTimeFFT.
-
-### Why this matters conceptually
-
-This is exactly the sort of task-conditioned visualization needed in activity-prediction studies, because it allows researchers to compare repeated trials of known activities.
-
-### Current state of the repo
-
-The code for ambulatory plotting is present, but the record page template currently does not include the ambulatory task-selection partial, so the continuous-record viewer is the clearest fully integrated plotting path in the current codebase.
-
-That does not reduce the importance of the ambulatory architecture; it simply means part of that flow looks mid-integration.
-
----
-
 ## Additional Utilities And Operational Components
 
 ## Logging
@@ -1468,96 +1280,6 @@ This is used across modules for processing and mail failures.
 `utils.send_mail()` uses local SMTP on `localhost`.
 
 The dashboard uses this for verification email delivery. The separate `mailproxy/` endpoint provides a machine-callable wrapper around the same functionality.
-
-## Manual data assessment helper
-
-`assess-data.py` is a useful research utility. It scans a continuous record's CSV files and reports:
-
-- gaps greater than 1000 ms
-- unordered timestamps
-
-This tells us the developers were actively concerned with signal integrity, not just storage.
-
-That fits the overall philosophy of the repository.
-
----
-
-## What This Project Enables In A Larger Activity-Recognition Stack
-
-If you were building a full activity classification or daily-activity prediction platform, this repository would sit naturally in front of the model training and inference layers.
-
-### It already solves the "dataset engineering" problem
-
-Many activity-recognition efforts fail to scale because the team never builds a robust data model. Here, much of that foundational work is already done:
-
-- subjects are normalized,
-- sessions are modeled,
-- files are typed by sensor,
-- labels are queryable,
-- timestamps are managed,
-- and exports are available.
-
-### It could feed classical ML pipelines
-
-Examples:
-
-- sliding-window statistical features from raw `.imu` data
-- dominant-frequency features from `.tr` files
-- task-conditioned feature extraction for supervised models
-- continuous interval extraction for sequence models
-
-### It could feed deep learning pipelines
-
-Examples:
-
-- fixed-size windows sampled from `Datafile_task_rel` intervals
-- multimodal accelerometer + gyroscope fusion
-- self-supervised pretraining on continuous streams
-- weakly supervised models using task/position interval annotations
-
-### It helps with labeling, not only storage
-
-The presence of `Task`, `Position`, and temporal relation tables means this system is already thinking in terms of structured annotations, which is exactly what a serious modeling workflow needs.
-
----
-
-## Current Implementation Notes And Caveats
-
-This README describes the repository as it exists in code, but a few practical notes are worth keeping in mind.
-
-### 1. The strongest implemented path is the continuous-record workflow
-
-That includes:
-
-- upload,
-- overlap trimming,
-- CSV sorting,
-- IMU conversion,
-- tremor derivation,
-- on-demand plotting,
-- and export.
-
-Ambulatory support exists in models, backend helpers, and partial frontend code, but some of its template wiring appears incomplete.
-
-### 2. Migrations are not committed
-
-The repository contains `migrations/__init__.py` files, but no concrete migration history. So the schema is defined clearly in models, but reproducible database bootstrap would require generating migrations.
-
-### 3. Environment configuration is only partially externalized
-
-API keys are loaded from environment variables, but database credentials and Django secret material are hard-coded in `settings.py`. For a production or collaborative deployment, those should be moved to environment configuration.
-
-### 4. This repo is mostly a platform layer, not the final predictive model
-
-Its value is real and substantial, but it lives mainly in:
-
-- data curation,
-- preprocessing,
-- storage design,
-- derived feature generation,
-- and exploratory visualization.
-
-That is often the right architecture boundary for a research dashboard.
 
 ---
 
@@ -1579,18 +1301,6 @@ It:
 - and exposes the results to researchers through a browser.
 
 That makes it highly relevant to any project trying to infer or predict activities from daily-life inertial sensor data.
-
----
-
-## Short Architectural Summary
-
-If you only remember a few points, they should be these:
-
-1. **The database design is one of the project's main strengths.** It cleanly separates subjects, records, files, tasks, positions, and derived metrics.
-2. **The custom `.imu` and `.tr` formats are central.** They are what make fast, range-based visualization practical.
-3. **The frontend is built around windowed server-side sampling, not full-data plotting.** That is the correct design for long sensor recordings.
-4. **The project is already aligned with ML workflow needs.** It preserves labels, timestamps, sensor identity, and exportable structure.
-5. **The codebase is best seen as an experimental data platform.** It is the layer that makes later activity-prediction models feasible and trustworthy.
 
 ---
 
